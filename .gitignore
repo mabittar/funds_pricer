@@ -1,0 +1,40 @@
+# Python
+*.pyc
+__pycache__
+
+# Environment
+env_*
+*_env
+*.env
+.venv
+venv
+!test.env
+*.coverage
+logs
+
+# IDE and development files
+.vscode
+.idea
+*.log
+logs/
+nohup.out
+
+# Temp files
+temp
+
+# Commit
+.commit
+
+# Secret files
+*credential*
+qicredit-*-seu-madruga-api.json
+
+# Test Database
+db_test
+
+# Public variables file
+!public.env
+
+# Test files
+coverage.xml
+test_report.html

@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  redis:
+    container_name: my_redis
+    image: "redis/redis-stack:edge-edge"
+    networks:
+    - pricer_network
+    volumes:
+    - ./redis:/data
+
+  pricer:
+    container_name: pricer
+    build: ./src/pricer
+    restart: always
+    ports:
+      - "8000:8000"
+    networks:
+    - pricer_network
+    depends_on:
+    - redis
+    env_file:
+    - ./src/.env
+
+networks:
+  pricer_network:
