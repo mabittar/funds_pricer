@@ -1,16 +1,17 @@
+import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from time import sleep
 from typing import List, Optional, Tuple, Union
 
-import logging
 from fastapi import HTTPException
 from selenium import webdriver
+from selenium.webdriver import Chrome
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.ui import WebDriverWait  # type: ignore
 
 # TODO: handle with constants
 CVM_URL = "https://cvmweb.cvm.gov.br/SWB/Sistemas/SCW/CPublica/CConsolFdo/ResultBuscaParticFdo.aspx?CNPJNome="
@@ -57,11 +58,11 @@ class Scrapper:
         chrome_prefs["profile.default_content_settings"] = {"images": 2}  # disable image
         self.chrome_options = chrome_options
         
-    @staticmethod
-    def get_fund_pk(url_str: str) -> str:
+    def get_fund_pk(self, url_str: str) -> str:
         find_str = "?PK_PARTIC="
         pk_postion = url_str.find(find_str)
         url_str = url_str[pk_postion + len(find_str):].split("&")[0]
+        self.logger.debug("Fund unique id: %s" % url_str)
         return url_str
     
     @staticmethod
@@ -77,7 +78,7 @@ class Scrapper:
             available_date_datetime = [(index, date_str) for index, date_str in available_date_datetime if datetime.strptime(f'01/{date_str}', "%d/%m/%Y").date() <= end_date ]
         return available_date_datetime
     
-    async def parse_table(self, wd: webdriver, fund_daily_link:str, from_date: Union[date, None] = None, end_date: Union[date, None] = None ) -> List[TimeSeries]:
+    async def parse_table(self, wd: Chrome, fund_daily_link:str, from_date: Union[date, None] = None, end_date: Union[date, None] = None ) -> List[TimeSeries]:
         wd.get(fund_daily_link)
         # table = wd.find_element(By.ID, 'TABLE1')
         selectors = wd.find_element(By.XPATH,'//*[@id="ddComptc"]')
@@ -88,7 +89,7 @@ class Scrapper:
         wd.execute_script("showDropdown = function (element) {var event; event = document.createEvent('MouseEvents'); event.initMouseEvent('mousedown', true, true, window); element.dispatchEvent(event); }; showDropdown(arguments[0]);",select)
         # open dropdown options
         ts_list = []
-        # TODO: log len(selectors_filtered) + 1
+        self.logger.debug(f"Found {len(selectors_filtered)+1} months to scrap")
         for i, month_year in selectors_filtered:
             i += 1
             wd.find_element(By.XPATH, f"//*[@id='ddComptc']/option[{i}]").click()
@@ -116,11 +117,12 @@ class Scrapper:
     async def get_funds_details(
         self, 
         document_number: str, 
-        wd: webdriver
+        wd: Chrome
         ) -> str:
         wd.get(CVM_URL + document_number)  # url = CVM + CNPJ
         WebDriverWait(wd, 20).until(EC.element_to_be_clickable((By.CLASS_NAME, 'HRefPreto')))
         wd.execute_script("__doPostBack('ddlFundos$_ctl0$lnkbtn1','')")
+        self.logger.debug("Success executed javascript!")
         pk_url = wd.current_url
         self.fund_ts_model.fund_pk = self.get_fund_pk(pk_url)
         fund_name_elem = wd.find_element(By.XPATH, '//*[@id="lbNmDenomSocial"]')
@@ -152,7 +154,8 @@ class Scrapper:
             end_date = end_date if hasattr(end_date, "strftime") else self.str_2_date(end_date)
         # Detalhes do fundo
         # TODO: validar CNPJ
-        with webdriver.Chrome('chromedriver',options=self.chrome_options) as wd:
+        with webdriver.Chrome('chromedriver', options=self.chrome_options) as wd:
+            self.logger.debug("Success stated webdriver")
             if document_number:
                 self.fund_ts_model.doc_number = document_number
                 fund_daily_link = await self.get_funds_details(document_number, wd)
@@ -164,16 +167,16 @@ class Scrapper:
             
         return self.fund_ts_model
 
-# if __name__ == "__main__":
-#     import asyncio
-#     from time import perf_counter
-#     async def get_data():
-#         scrapper = Scrapper()
-#         result = await asyncio.gather(scrapper.get_fund_data(document_number="18993924000100", from_date="01/2019"))
-#         return result
+if __name__ == "__main__":
+    import asyncio
+    from time import perf_counter
+    async def get_data():
+        scrapper = Scrapper()
+        result = await asyncio.gather(scrapper.get_fund_data(document_number="18993924000100", from_date="01/2019"))
+        return result
 
-#     s = perf_counter()
-#     result = await get_data()
-#     elapsed = perf_counter() - s
-#     print(f"Script executed in {elapsed:0.2f} seconds.")
+    s = perf_counter()
+    result = asyncio.run(get_data())
+    elapsed = perf_counter() - s
+    print(f"Script executed in {elapsed:0.2f} seconds.")
     

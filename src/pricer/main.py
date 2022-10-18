@@ -152,6 +152,42 @@ async def set_cache(data, key: Optional[str]=None):
         
     )
     
+async def add_many_to_timeseries(
+    key_pairs: Iterable[Tuple[str, str]],
+    data: BitcoinSentiments
+):
+    """
+    Add many samples to a single timeseries key.
+    `key_pairs` is an iteratble of tuples containing in the 0th position the
+    timestamp key into which to insert entries and the 1th position the name
+    of the key within th `data` dict to find the sample.
+    """
+    partial = functools.partial(redis.execute_command, 'TS.MADD')
+    for datapoint in data:
+        for timeseries_key, sample_key in key_pairs:
+            partial = functools.partial(
+                partial, timeseries_key, int(
+                    float(datapoint['timestamp']) * 1000,
+                ),
+                datapoint[sample_key],
+            )
+    return await partial()
+
+
+def make_keys():
+    return Keys()
+
+
+async def persist(keys: Keys, data: BitcoinSentiments):
+    ts_sentiment_key = keys.timeseries_sentiment_key()
+    ts_price_key = keys.timeseries_price_key()
+    await add_many_to_timeseries(
+        (
+            (ts_price_key, 'btc_price'),
+            (ts_sentiment_key, 'mean'),
+        ), data,
+    )
+    
 # Scrapping
 async def scrapping(data: RequestQuery) -> FundTS:
     scrapper = Scrapper(logger=logger)
@@ -179,34 +215,44 @@ async def query_funds(query: RequestQuery, background_tasks: BackgroundTasks):
     
     if not data:
         raise HTTPException(status_code=400, detail=f"No fund found with document_number {query.document}")
-    else:
-        first_date = None
-        last_date = None
-        value= None
-        owners= None
-        net_worth= None
-        timeseries = data.ts
-        if isinstance(timeseries, list):
-            first_date = timeseries[0].timestamp
-            last_date = timeseries[-1].timestamp
-            value = [FundValueTS(timestamp=ts.timestamp, value=ts.value) for ts in timeseries]
-            net_worth = [FundNetWorthTS(timestamp=ts.timestamp, value=ts.net_worth) for ts in timeseries]
-            owners = [FundOwnerTS(timestamp=ts.timestamp, value=ts.owners) for ts in timeseries]
-        
-        fund = Fund(
-            document=data.doc_number,
-            name=data.fund_name,
-            fund_id=data.fund_pk,
-            first_date=data.released_on,
-            active=data.active,
-            first_query_date=first_date,
-            last_query_date=last_date,
-            value=value,
-            net_worth=net_worth,
-            owners=owners,
-        )
-        key = Keys().fund_key(document=query.document)
-        background_tasks.add_task(set_cache, fund, key)
+    
+    first_date = None
+    last_date = None
+    value= None
+    owners= None
+    net_worth= None
+    timeseries = data.ts
+    if isinstance(timeseries, list):
+        first_date = timeseries[0].timestamp
+        last_date = timeseries[-1].timestamp
+        value = [FundValueTS(timestamp=ts.timestamp, value=ts.value) for ts in timeseries]
+        net_worth = [FundNetWorthTS(timestamp=ts.timestamp, value=ts.net_worth) for ts in timeseries]
+        owners = [FundOwnerTS(timestamp=ts.timestamp, value=ts.owners) for ts in timeseries]
+    
+    fund = Fund(
+        document=data.doc_number,
+        name=data.fund_name,
+        fund_id=data.fund_pk,
+        first_date=data.released_on,
+        active=data.active,
+        first_query_date=first_date,
+        last_query_date=last_date,
+        value=value,
+        net_worth=net_worth,
+        owners=owners,
+    )
+    key = Keys().fund_key(document=query.document)
+    background_tasks.add_task(set_cache, fund, key)
+    response = ResponseQuery(
+        document=data.doc_number,
+        end_date=last_date,
+        active=data.active,
+        from_date=first_date,
+        fund_released_on=data.released_on,
+        fund_name=data.fund_name,
+        timeseries=data.ts.json()
+        )  # type: ignore
+    return response
 
 
 @app.get("/funds/{document}")
