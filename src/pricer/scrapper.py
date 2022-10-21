@@ -17,37 +17,57 @@ from selenium.webdriver.support.ui import WebDriverWait  # type: ignore
 CVM_URL = "https://cvmweb.cvm.gov.br/SWB/Sistemas/SCW/CPublica/CConsolFdo/ResultBuscaParticFdo.aspx?CNPJNome="
 FUND_DETAIL_URL = "https://cvmweb.cvm.gov.br/SWB/Sistemas/SCW/CPublica/InfDiario/CPublicaInfDiario.aspx?PK_PARTIC=%s&SemFrame=" # exemplo: 132922. Atenção ao pk_partic
 
+        
 @dataclass(order=True)
-class TimeSeries:
-  sort_index: datetime = field(init=False, repr=False)
-  timestamp: datetime
-  value: Decimal
-  net_worth_str: str = field(repr=False)
-  net_worth: float = field(init=False)
-  owners: int
+class NetWorthTimeSeries:
+    sort_index: datetime = field(init=False, repr=False)
+    timestamp: datetime
+    net_worth_str: str = field(repr=False)
+    net_worth: float = field(init=False)
 
-  def __post_init__(self):
-        s = self.net_worth_str.replace('.','').replace(',','.')
-        parsed_num = float(s)
+    def __post_init__(self):
+        str_number = self.net_worth_str.replace('.','').replace(',', '.')
+        parsed_num = float(str_number)
         self.net_worth = parsed_num
         self.sort_index = self.timestamp
 
+
+@dataclass(order=True)
+class OwnersTimeSeries:
+    sort_index: datetime = field(init=False, repr=False)
+    timestamp: datetime
+    owners: int
+
+    def __post_init__(self):
+        self.sort_index = self.timestamp
+
+
+@dataclass(order=True)
+class ValueTimeSeries:
+    sort_index: datetime = field(init=False, repr=False)
+    timestamp: datetime
+    value: Decimal
+
+    def __post_init__(self):
+        self.sort_index = self.timestamp
+
+
 @dataclass
 class FundTS:
-  doc_number: Optional[str] = None
-  fund_pk: Optional[str] = None
-  active: Optional[bool] = False
-  fund_name: Optional[str] = None
-  released_on: Optional[date] = None
-  ts: Optional[List[TimeSeries]] = None
-  
+    doc_number: Optional[str] = None
+    fund_pk: Optional[str] = None
+    active: Optional[bool] = False
+    fund_name: Optional[str] = None
+    released_on: Optional[date] = None
+    value: Optional[List[ValueTimeSeries]] = None
+    net_worth: Optional[List[NetWorthTimeSeries]] = None
+    owners: Optional[List[OwnersTimeSeries]] = None
   
 
 class Scrapper:
-    def __init__(self, logger = None):
+    def __init__(self, logger=None):
         self.fund_ts_model = FundTS()
         self.logger = logger if logger is not None else logging.getLogger(__name__)
-        logger = logging.getLogger(__name__)
         chrome_options = webdriver.ChromeOptions()
         chrome_options = Options()
         chrome_options.add_argument("--headless")
@@ -60,8 +80,8 @@ class Scrapper:
         
     def get_fund_pk(self, url_str: str) -> str:
         find_str = "?PK_PARTIC="
-        pk_postion = url_str.find(find_str)
-        url_str = url_str[pk_postion + len(find_str):].split("&")[0]
+        pk_position = url_str.find(find_str)
+        url_str = url_str[pk_position + len(find_str):].split("&")[0]
         self.logger.debug("Fund unique id: %s" % url_str)
         return url_str
     
@@ -78,7 +98,13 @@ class Scrapper:
             available_date_datetime = [(index, date_str) for index, date_str in available_date_datetime if datetime.strptime(f'01/{date_str}', "%d/%m/%Y").date() <= end_date ]
         return available_date_datetime
     
-    async def parse_table(self, wd: Chrome, fund_daily_link:str, from_date: Union[date, None] = None, end_date: Union[date, None] = None ) -> List[TimeSeries]:
+    async def parse_table(
+        self, 
+        wd: Chrome, 
+        fund_daily_link:str, 
+        from_date: Union[date, None] = None, 
+        end_date: Union[date, None] = None
+    ) -> dict:
         wd.get(fund_daily_link)
         # table = wd.find_element(By.ID, 'TABLE1')
         selectors = wd.find_element(By.XPATH,'//*[@id="ddComptc"]')
@@ -88,16 +114,17 @@ class Scrapper:
         select = wd.find_element(By.XPATH, '//*[@id="ddComptc"]')
         wd.execute_script("showDropdown = function (element) {var event; event = document.createEvent('MouseEvents'); event.initMouseEvent('mousedown', true, true, window); element.dispatchEvent(event); }; showDropdown(arguments[0]);",select)
         # open dropdown options
-        ts_list = []
+        value_ts, owner_ts, networth_ts = [], [], []
         self.logger.debug(f"Found {len(selectors_filtered)+1} months to scrap")
         for i, month_year in selectors_filtered:
+            # TODO: fazer loop assíncrono
             i += 1
             wd.find_element(By.XPATH, f"//*[@id='ddComptc']/option[{i}]").click()
             #this will click the option which index is defined by positionn
             sleep(3)
             WebDriverWait(wd, 20).until(EC.presence_of_element_located((By.XPATH, '//*[@id="dgDocDiario"]')))
             rows = wd.find_elements(By.XPATH, '//*[@id="dgDocDiario"]/tbody/tr')
-            for index, row in enumerate(rows[1:]):
+            for row in rows[1:]:  # linha 0 header da tabela
                 daily_data = [field.replace(" ", "") for field in row.text.split(" ")]
                 value = daily_data[1]
                 date_field = daily_data[0]
@@ -106,19 +133,28 @@ class Scrapper:
                         net_worth = daily_data[4]
                         owner_number = daily_data[6]
                         datetime_stamp =  datetime.strptime(f'{date_field}/{month_year}', "%d/%m/%Y")
-                        ts = TimeSeries(datetime_stamp, Decimal(value.replace(",",".")), net_worth, int(owner_number))
-                        ts_list.append(ts)
+                        value_data = ValueTimeSeries(datetime_stamp, Decimal(value.replace(",",".")))
+                        networth_data = NetWorthTimeSeries(datetime_stamp, net_worth)
+                        owner_data = OwnersTimeSeries(datetime_stamp, int(owner_number))
+                        value_ts.append(value_data)
+                        owner_ts.append(owner_data)
+                        networth_ts.append(networth_data)
                     except ValueError as e:
                         print(e)
                         print(date_field, month_year)
-
-        return ts_list
+        return_dict = {
+            "value_ts": value_ts,
+            "networth_ts": networth_ts,
+            "owner_ts": owner_ts
+        }
+        
+        return return_dict
 
     async def get_funds_details(
-        self, 
-        document_number: str, 
-        wd: Chrome
-        ) -> str:
+            self,
+            document_number: str,
+            wd: Chrome
+    ) -> str:
         wd.get(CVM_URL + document_number)  # url = CVM + CNPJ
         WebDriverWait(wd, 20).until(EC.element_to_be_clickable((By.CLASS_NAME, 'HRefPreto')))
         wd.execute_script("__doPostBack('ddlFundos$_ctl0$lnkbtn1','')")
@@ -129,7 +165,7 @@ class Scrapper:
         self.fund_ts_model.fund_name = fund_name_elem.text
         start_at = wd.find_element(By.XPATH, '//*[@id="lbInfAdc1"]')
         self.fund_ts_model.released_on = datetime.strptime(start_at.text, '%d/%m/%Y').date()
-        
+        # TODO: verificar status do fundo
         # Lâmina de cotas diárias
         fund_daily = wd.find_element(By.XPATH, '//*[@id="Hyperlink2"]')
         fund_daily_link = fund_daily.get_attribute('href')
@@ -142,7 +178,7 @@ class Scrapper:
         fund_pk: Union[str, None]= None, 
         from_date: Union[date, str, None] = None, 
         end_date: Union[date, str, None] = None
-        ) -> FundTS:
+    ) -> FundTS:
         if document_number is None and fund_pk is None:
             raise HTTPException(
                 status_code=400,
@@ -162,14 +198,22 @@ class Scrapper:
             else:
                 fund_daily_link = FUND_DETAIL_URL % fund_pk
             # parser da tabela
-            time_series = await self.parse_table(wd, fund_daily_link, from_date, end_date)  # type: ignore
-            self.fund_ts_model.ts = sorted(time_series)
+            time_series: dict = await self.parse_table(wd, fund_daily_link, from_date, end_date)  # type: ignore
+            value_ts = time_series.get("value_ts")
+            networth_ts = time_series.get("networth_ts")
+            owner_ts = time_series.get("owner_ts")
+            
+            self.fund_ts_model.value = sorted(value_ts) if value_ts is not None else None
+            self.fund_ts_model.net_worth = sorted(networth_ts) if networth_ts is not None else None
+            self.fund_ts_model.owners = sorted(owner_ts) if owner_ts is not None else None
             
         return self.fund_ts_model
+
 
 if __name__ == "__main__":
     import asyncio
     from time import perf_counter
+
     async def get_data():
         scrapper = Scrapper()
         result = await asyncio.gather(scrapper.get_fund_data(document_number="18993924000100", from_date="01/2019"))
