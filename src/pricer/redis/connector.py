@@ -7,10 +7,9 @@ from xmlrpc.client import ResponseError
 import aioredis
 from pydantic.json import pydantic_encoder
 
-from ..main import logger
 from .funds_models import FundModel, FundValueTS, FundNetWorthTS, FundOwnerTS
-from ..scrapper import FundTS
-from ..settings import settings
+from src.pricer.scrapper import FundTS
+from src.pricer.settings import logger, settings
 
 redis_url = f'redis://{settings.redis_host}:{settings.redis_port}'
 
@@ -43,9 +42,21 @@ class Keys:
 
 
 class RedisConnector:
-    def __init__(self, redis):
-        self.redis = redis
+    def __init__(self):
+        self.redis = aioredis.from_url(
+            url=redis_url,
+            decode_responses=True,
+            encoding="utf-8"
+        )
 
+    async def is_redis_available(self):
+        # ... get redis connection here, or pass it in. up to you.
+        try:
+            await self.redis.ping()
+        except (aioredis.exceptions.ConnectionError,
+                aioredis.exceptions.BusyLoadingError):
+            return False
+        return True
     def create_model(self, data: FundTS):
         key = Keys().fund_key(data.doc_number)
 
@@ -57,6 +68,7 @@ class RedisConnector:
                     'RELEASED_ON': data.released_on
                     }
         )
+
 
 def datetime_parser(info: dict):
     for k,v in info.items():

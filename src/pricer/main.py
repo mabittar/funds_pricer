@@ -1,25 +1,17 @@
 # This Redis instance is tuned for durability.
-import logging
-
 from aredis_om import NotFoundError
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from fastapi_cache import FastAPICache
-from fastapi_cache.backends.redis import RedisBackend
 from fastapi_cache.decorator import cache
 from starlette.requests import Request
 from starlette.responses import Response
 
-from .redis.connector import redis, Keys, redis_url, set_cache, initialize_redis, persist
-from .redis.funds_models import FundModel
-from .schemas.funds import RequestQuery, ResponseQuery
-from .scrapper import FundTS, Scrapper
-from .settings import Settings
+from redis.connector import redis_url, Keys, initialize_redis, persist, set_cache, RedisConnector
+from redis.funds_models import FundModel
+from schemas.funds import RequestQuery, ResponseQuery
+from scrapper import FundTS, Scrapper
+from settings import Settings, logger
 
 settings = Settings()
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-
 app = application = FastAPI()
 
 
@@ -34,9 +26,8 @@ async def scrapping(data: RequestQuery) -> FundTS:
 @app.on_event("startup")
 async def startup():
     logger.info(f"Staring Redis connection on: {redis_url}")
-    FastAPICache.init(RedisBackend(redis), prefix="fastapi-cache")  # type: ignore
-    keys = Keys()
-    await initialize_redis(keys.cache_key())
+    redis = RedisConnector()
+    await redis.is_redis_available()
     # You can set the Redis OM URL using the REDIS_OM_URL environment
     # variable, or by manually creating the connection using your model's
     # Meta object.
