@@ -1,11 +1,10 @@
 # This Redis instance is tuned for durability.
 from aredis_om import NotFoundError
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from fastapi_cache.decorator import cache
 from starlette.requests import Request
 from starlette.responses import Response
 
-from redis.connector import redis_url, Keys, initialize_redis, persist, set_cache, RedisConnector
+from redis.connector import redis_url, RedisConnector
 from redis.funds_models import FundModel
 from schemas.funds import RequestQuery, ResponseQuery
 from scrapper import FundTS, Scrapper
@@ -18,7 +17,11 @@ app = application = FastAPI()
 # Scrapping
 async def scrapping(data: RequestQuery) -> FundTS:
     scrapper = Scrapper(logger=logger)
-    result = await scrapper.get_fund_data(**data)  # type: ignore
+    result = await scrapper.get_fund_data(
+        document_number=data.document,
+        from_date=data.from_date,
+        end_date=data.end_date,
+    )
     
     return result
 
@@ -63,8 +66,8 @@ async def query_funds(query: RequestQuery, background_tasks: BackgroundTasks):
         net_worth=data.net_worth,
         owners=data.owners,
     )
-    await persist(fund)
-    background_tasks.add_task(set_cache, fund)
+    await fund.save()
+    # background_tasks.add_task(set_cache, fund)
     response = ResponseQuery(
         document=data.doc_number,
         end_date=last_date,
@@ -80,7 +83,6 @@ async def query_funds(query: RequestQuery, background_tasks: BackgroundTasks):
 
 
 @app.get("/funds/{document}")
-@cache(expire=10)
 async def get_customer(document: str, request: Request, response: Response):
     # To retrieve this customer with its primary key, we use `Customer.get()`:
     try:

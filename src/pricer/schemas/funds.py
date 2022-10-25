@@ -17,6 +17,7 @@ class ResponseQuery(RequestQuery):
     document: str
     quotes: Optional[Decimal]
     fund_name: Optional[str]
+    fund_id: Optional[str]
     fund_released_on: Optional[datetime.date]
     from_date: Optional[datetime.date]
     active: Optional[bool]
@@ -27,5 +28,5 @@ class ResponseQuery(RequestQuery):
     class Config:
         json_encoders = {
             datetime: lambda v: v.date(),
-            Decimal: lambda v: float(v.quantize(Decimal("1.0000")))
+            Decimal: lambda v: str(v.quantize(Decimal("1.0000")))
         }

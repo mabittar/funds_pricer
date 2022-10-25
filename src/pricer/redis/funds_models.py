@@ -2,21 +2,21 @@ import datetime
 from decimal import Decimal
 from typing import Optional
 
-from aredis_om import HashModel, JsonModel
+from aredis_om import HashModel, JsonModel, EmbeddedJsonModel
 from pydantic import Field
 
 
-class FundValueTS(HashModel):
+class FundValueTS(EmbeddedJsonModel):
     timestamp: datetime.datetime
     value: Decimal
 
 
-class FundNetWorthTS(HashModel):
+class FundNetWorthTS(EmbeddedJsonModel):
     timestamp: datetime.datetime
     value: Decimal
 
 
-class FundOwnerTS(HashModel):
+class FundOwnerTS(EmbeddedJsonModel):
     timestamp: datetime.datetime
     value: Decimal
 

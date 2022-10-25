@@ -132,8 +132,8 @@ class Scrapper:
                     try:
                         net_worth = daily_data[4]
                         owner_number = daily_data[6]
-                        datetime_stamp =  datetime.strptime(f'{date_field}/{month_year}', "%d/%m/%Y")
-                        value_data = ValueTimeSeries(datetime_stamp, Decimal(value.replace(",",".")))
+                        datetime_stamp = datetime.strptime(f'{date_field}/{month_year}', "%d/%m/%Y")
+                        value_data = ValueTimeSeries(datetime_stamp, Decimal(value.replace(",", ".")))
                         networth_data = NetWorthTimeSeries(datetime_stamp, net_worth)
                         owner_data = OwnersTimeSeries(datetime_stamp, int(owner_number))
                         value_ts.append(value_data)
@@ -174,9 +174,9 @@ class Scrapper:
     
     async def get_fund_data(
         self, 
-        document_number: Union[str, None]= None, 
-        fund_pk: Union[str, None]= None, 
-        from_date: Union[date, str, None] = None, 
+        document_number: Union[str, None] = None,
+        fund_pk: Union[str, None] = None,
+        from_date: Union[date, str, None] = None,
         end_date: Union[date, str, None] = None
     ) -> FundTS:
         if document_number is None and fund_pk is None:
