@@ -1,16 +1,21 @@
 import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, List
 
 from pydantic import BaseModel
-
-from src.pricer.redis.funds_models import FundValueTS, FundNetWorthTS, FundOwnerTS
 
 
 class RequestQuery(BaseModel):
     document: str
     from_date: Optional[str]
-    end_date: Optional[str]
+    # TODO: validate MM/YYYY
+
+
+class TimeSeriesModel(BaseModel):
+    timestamp: datetime.datetime
+    value: Decimal
+    owners: int
+    net_worth: float
 
 
 class ResponseQuery(RequestQuery):
@@ -21,12 +26,4 @@ class ResponseQuery(RequestQuery):
     fund_released_on: Optional[datetime.date]
     from_date: Optional[datetime.date]
     active: Optional[bool]
-    value: Optional[FundValueTS]
-    net_worth: Optional[FundNetWorthTS]
-    owners: Optional[FundOwnerTS]
-
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.date(),
-            Decimal: lambda v: str(v.quantize(Decimal("1.0000")))
-        }
+    timeseries: Optional[List[TimeSeriesModel]]

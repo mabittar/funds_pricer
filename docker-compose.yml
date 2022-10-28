@@ -3,7 +3,7 @@ version: "3.9"
 services:
   redis:
     container_name: my_redis
-    image: "redislabs/redismod"
+    image: "redislabs/redismod"  # redis/redistimeseries
     ports:
     - "15000:6379"
     # networks:

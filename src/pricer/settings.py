@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     cvm_fund_url: str = Field(env='FUND_DETAIL_URL', default="")
     redis_host: str = Field(env='REDIS_HOST', default="localhost")
     redis_port: int = Field(env='REDIS_PORT', default=15000)
+    debug: str = Field(env='DEBUG', default="False")
+    log_level: str = "DEBUG" if debug else "INFO"
 
     class Config:
         env_file = find_dotenv(filename=".env", usecwd=True)
@@ -23,7 +25,7 @@ class LogConfig(BaseModel):
 
     LOGGER_NAME: str = "pricerlog"
     LOG_FORMAT: str = "%(levelprefix)s | %(asctime)s | %(message)s"
-    LOG_LEVEL: str = "DEBUG"
+    LOG_LEVEL: str = settings.log_level
 
     # Logging config
     version = 1
@@ -43,7 +45,7 @@ class LogConfig(BaseModel):
         },
     }
     loggers = {
-        "mycoolapp": {"handlers": ["default"], "level": LOG_LEVEL},
+        "pricerlog": {"handlers": ["default"], "level": LOG_LEVEL},
     }
 
 
