@@ -1,19 +1,34 @@
+import dataclasses
 import datetime
 import functools
 import json
 from decimal import Decimal
-from typing import Optional, Tuple
+from threading import Thread
+from typing import Optional, Tuple, List
 from xmlrpc.client import ResponseError
 
 from aioredis.exceptions import ResponseError
 from pydantic.json import pydantic_encoder
-from src.pricer.schemas.funds import TimeSeriesModel
+
+from src.pricer.schemas.funds import TimeSeriesModel, FundModelLabel
 from src.pricer.scrapper import FundTS
 from src.pricer.settings import logger, settings
 
 import aioredis as redis
 
 redis_url = f'redis://{settings.redis_host}:{settings.redis_port}'
+
+
+class EnhancedJSONEncoder(json.JSONEncoder):
+    def default(self, o):
+        if dataclasses.is_dataclass(o):
+            return dataclasses.asdict(o)
+        if isinstance(o, Decimal):
+            return float(o)
+        if isinstance(o, (datetime.datetime, datetime.date)):
+            return o.isoformat()
+
+        return super().default(o)
 
 
 class Keys:
@@ -32,8 +47,13 @@ class Keys:
     def owners_ts(self, document: str) -> str:
         return f'{self.prefix}owners_{document}'
 
-    def cache_key(self) -> str:
-        return f'{self.prefix}cache'
+    def timeseries_keys(self, document: str) -> List[str]:
+        keys_list = [
+            self.value_ts(document),
+            self.owners_ts(document),
+            self.net_worth_ts(document)
+        ]
+        return keys_list
 
 
 class RedisConnector:
@@ -57,7 +77,7 @@ class RedisConnector:
         return True
 
     async def create_model(self, data: FundTS):
-        key = Keys().fund_key(data.doc_number)
+        key = Keys().fund_key(data.document)
         try:
             await self.redis.execute_command(
                 'CREATE',
@@ -74,36 +94,64 @@ class RedisConnector:
         except ResponseError as e:
             logger.info('Could not create model %s, error: %s', key, e)
 
-    # TODO: adjust and use REDIS-OM encoders/decoders
-    @staticmethod
-    def datetime_parser(info: dict):
-        for k, v in info.items():
-            if isinstance(v, str) and v.endswith('+00:00'):
-                try:
-                    info[k] = datetime.datetime.fromisoformat(v)
-                except Exception:
-                    logger.info('Error while parsing key: %s with value: %s', k, v)
-
-        return info
-
     @staticmethod
     def serialize_dates(v):
-        return datetime.datetime.fromtimestamp(v) if isinstance(v, float) else v
+        return datetime.datetime.fromtimestamp(v) if isinstance(v, int) else v
 
-    async def get_cache_key(self, document: str):
-        key = Keys().fund_key(document=document)
+    @staticmethod
+    def str_2_timestamp(str_date) -> int:
+        return datetime.datetime.strptime(f'01/{str_date}', "%d/%m/%Y").timestamp()
+
+    async def get_timeseries(self, key: str, from_date, to_date):
+        cached_ts = await self.redis.execute_command(
+            'TS.RANGE',
+            key,
+            from_date,
+            to_date
+        )
+        if cached_ts:
+            return cached_ts
+        else:
+            return None
+
+    async def get_cached_timeseries(
+            self, key_list: list, from_date: str = None, to_date: str = None
+    ):
+        """
+        Add many samples to several timeseries keys.
+        `key_pairs` is an iterable of tuples containing in the 0th position the
+        timestamp key into which to insert entries and the 1th position the name
+        of the key within th `data` dict to find the sample.
+        """
+        from_date = self.str_2_timestamp(from_date) if from_date is not None else 0
+        to_date = self.str_2_timestamp(to_date) if to_date is not None else "+"
+        ts_cached = {}
+        for key in key_list:
+            ts_cached[key] = await self.get_timeseries(key, from_date, to_date)
+
+        # TODO: make threads
+        # threads = [Thread(target=self.get_timeseries, args=(key, from_date, to_date)) for key in key_list]
+        # for thread in threads:
+        #     thread.start()
+        # for thread in threads:
+        #     thread.join()
+
+        return ts_cached
+
+    async def get_cached_model(self, document: str) -> Optional[dict]:
+        key = Keys().fund_key(document)
         cached = await self.redis.get(key)
         if cached:
-            # TODO: transform to FundTS before return
             return json.loads(cached, object_hook=self.serialize_dates)
         else:
             return None
 
-    async def set_cache(self, data, key: Optional[str] = None):
+    async def set_cache(self, data: FundTS, key: Optional[str] = None):
         key = key if key is not None else Keys().fund_key(data.document)
+        data.timeseries = None
         await self.redis.set(
             key,
-            json.dumps(data, separators=(",", ":"), default=pydantic_encoder)
+            json.dumps(dataclasses.asdict(data), separators=(",", ":"), cls=EnhancedJSONEncoder)
 
         )
 
@@ -111,16 +159,16 @@ class RedisConnector:
             self, key_value_pairs: Tuple, data: list[TimeSeriesModel]
     ):
         """
-        Add many samples to a single timeseries key.
-        `key_pairs` is an iteratble of tuples containing in the 0th position the
+        Add many samples to several timeseries keys.
+        `key_pairs` is an iterable of tuples containing in the 0th position the
         timestamp key into which to insert entries and the 1th position the name
         of the key within th `data` dict to find the sample.
         """
         partial = functools.partial(self.redis.execute_command, 'TS.MADD')
         for entry in data:
             for timeseries_key, attr in key_value_pairs:
-                value = entry.__getattribute__(attr)
-                v = str(value.quantize(Decimal("1.0000"))) if isinstance(value, Decimal) else v
+                point = entry.__getattribute__(attr)
+                v = str(point.quantize(Decimal("1.000000000"))) if isinstance(point, Decimal) else point
                 partial = functools.partial(
                     partial,
                     timeseries_key,

@@ -1,14 +1,15 @@
 import logging
+import asyncio
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from time import sleep
+from itertools import chain
 from typing import List, Optional, Tuple, Union
 
 from fastapi import HTTPException
 from selenium import webdriver
 from selenium.webdriver import Chrome
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait  # type: ignore
@@ -23,7 +24,7 @@ class TimeSeries:
     sort_index: datetime = field(init=False, repr=False)
     timestamp: datetime
     value: Decimal
-    owners: int
+    owners: [int]
     net_worth_str: str = field(repr=False)
     net_worth: float = field(init=False)
 
@@ -36,11 +37,13 @@ class TimeSeries:
 
 @dataclass
 class FundTS:
-    doc_number: Optional[str] = None
+    document: Optional[str] = None
     fund_pk: Optional[str] = None
     active: Optional[bool] = False
     fund_name: Optional[str] = None
     released_on: Optional[date] = None
+    first_query_date: Optional[date] = None
+    last_query_date: Optional[date] = None
     timeseries: Optional[List[TimeSeries]] = None
   
 
@@ -49,7 +52,6 @@ class Scrapper:
         self.fund_ts_model = FundTS()
         self.logger = logger if logger is not None else logging.getLogger(__name__)
         chrome_options = webdriver.ChromeOptions()
-        chrome_options = Options()
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
@@ -68,15 +70,47 @@ class Scrapper:
     @staticmethod
     def str_2_date(str_date) -> date:
         return datetime.strptime(f'01/{str_date}', "%d/%m/%Y").date()
-    
-    @staticmethod    
-    def filter_limit_date(available_date_list: list, from_date: Union[date, None] = None, end_date: Union[date, None] = None) -> List[Tuple]:
+
+    @staticmethod
+    def filter_limit_date(available_date_list: list, from_date: Union[date, None] = None,
+                          end_date: Union[date, None] = None) -> List[Tuple]:
         available_date_datetime = [(index, date_str) for index, date_str in enumerate(available_date_list)]
         if from_date is not None:
-            available_date_datetime = [(index, date_str) for index, date_str in available_date_datetime if datetime.strptime(f'01/{date_str}', "%d/%m/%Y").date() >= from_date ]
+            available_date_datetime = [(index, date_str) for index, date_str in available_date_datetime if
+                                       datetime.strptime(f'01/{date_str}', "%d/%m/%Y").date() >= from_date]
         if end_date is not None:
-            available_date_datetime = [(index, date_str) for index, date_str in available_date_datetime if datetime.strptime(f'01/{date_str}', "%d/%m/%Y").date() <= end_date ]
+            available_date_datetime = [(index, date_str) for index, date_str in available_date_datetime if
+                                       datetime.strptime(f'01/{date_str}', "%d/%m/%Y").date() <= end_date]
         return available_date_datetime
+
+    async def parse_data(self, wd, i, month_year):
+        i += 1
+        wd.find_element(By.XPATH, f"//*[@id='ddComptc']/option[{i}]").click()
+        # this will click the option which index is defined by position
+        sleep(3)
+        WebDriverWait(wd, 20).until(EC.presence_of_element_located((By.XPATH, '//*[@id="dgDocDiario"]')))
+        rows = wd.find_elements(By.XPATH, '//*[@id="dgDocDiario"]/tbody/tr')
+        timeseries_list = []
+        for row in rows[1:]:  # linha 0 header da tabela
+            daily_data = [field.replace(" ", "") for field in row.text.split(" ")]
+            value = daily_data[1]
+            date_field = daily_data[0]
+            if value != "":
+                try:
+                    net_worth = daily_data[4]
+                    owner_number = daily_data[6]
+                    datetime_stamp = datetime.strptime(f'{date_field}/{month_year}', "%d/%m/%Y")
+                    timeseries = TimeSeries(
+                        timestamp=datetime_stamp,
+                        value=Decimal(value.replace(",", ".")),
+                        net_worth_str=net_worth,
+                        owners=int(owner_number)
+                    )
+                    timeseries_list.append(timeseries)
+                except ValueError as e:
+                    self.logger.error(e)
+                    self.logger.error(date_field, month_year)
+        return timeseries_list
 
     async def parse_table(
             self,
@@ -89,8 +123,7 @@ class Scrapper:
         # table = wd.find_element(By.ID, 'TABLE1')
         selectors = wd.find_element(By.XPATH, '//*[@id="ddComptc"]')
         selectors_list = selectors.text.split("\n")
-        selectors_list = [i.replace(' ', "") for i in selectors_list[
-                                                      :-1]]  # lembrar excluiur -1 pois é vazio ou validar o se o campo pode ser lido como mm/YYYY
+        selectors_list = [i.replace(' ', "") for i in selectors_list[:-1]]
         selectors_filtered = self.filter_limit_date(selectors_list, from_date, end_date)
         select = wd.find_element(By.XPATH, '//*[@id="ddComptc"]')
         wd.execute_script(
@@ -99,34 +132,16 @@ class Scrapper:
         # open dropdown options
         parsed_ts = []
         self.logger.debug(f"Found {len(selectors_filtered)} months to scrap")
-        for i, month_year in selectors_filtered:
-            i += 1
-            wd.find_element(By.XPATH, f"//*[@id='ddComptc']/option[{i}]").click()
-            # this will click the option which index is defined by position
-            sleep(3)
-            WebDriverWait(wd, 20).until(EC.presence_of_element_located((By.XPATH, '//*[@id="dgDocDiario"]')))
-            rows = wd.find_elements(By.XPATH, '//*[@id="dgDocDiario"]/tbody/tr')
-            for row in rows[1:]:  # linha 0 header da tabela
-                daily_data = [field.replace(" ", "") for field in row.text.split(" ")]
-                value = daily_data[1]
-                date_field = daily_data[0]
-                if value != "":
-                    try:
-                        net_worth = daily_data[4]
-                        owner_number = daily_data[6]
-                        datetime_stamp = datetime.strptime(f'{date_field}/{month_year}', "%d/%m/%Y")
-                        value_data = TimeSeries(
-                            timestamp=datetime_stamp,
-                            value=Decimal(value.replace(",", ".")),
-                            net_worth_str=net_worth,
-                            owners=int(owner_number)
-                        )
-                        parsed_ts.append(value_data)
-                    except ValueError as e:
-                        self.logger.error(e)
-                        self.logger.error(date_field, month_year)
+        # TODO: Make multiple threads
+        async with asyncio.Semaphore(20):
+            for i, month_year in selectors_filtered:
+                task = asyncio.ensure_future(self.parse_data(wd, i, month_year))
+                parsed_ts.append(task)
+            await asyncio.gather(*parsed_ts, return_exceptions=True)
+        time_series_result = [ts.result() for ts in parsed_ts]
+        timeseries = list(chain.from_iterable(time_series_result))
 
-        return parsed_ts
+        return timeseries
 
     async def get_funds_details(
             self,
@@ -153,6 +168,7 @@ class Scrapper:
 
     async def update_fund_data(self, fund_id: str, from_date: str) -> list[TimeSeries]:
         timeseries = None
+        from_date = datetime.fromisoformat(from_date) if isinstance(from_date, str) else None
         with webdriver.Chrome('chromedriver', options=self.chrome_options) as wd:
             time_series: list = await self.parse_table(
                 wd=wd,
@@ -185,7 +201,7 @@ class Scrapper:
         with webdriver.Chrome('chromedriver', options=self.chrome_options) as wd:
             self.logger.debug("Success stated webdriver")
             if document_number:
-                self.fund_ts_model.doc_number = document_number
+                self.fund_ts_model.document = document_number
                 fund_daily_link = await self.get_funds_details(document_number, wd)
             else:
                 fund_daily_link = settings.cvm_fund_url % fund_pk
@@ -203,11 +219,11 @@ if __name__ == "__main__":
 
     async def get_data():
         scrapper = Scrapper()
-        result = await asyncio.gather(scrapper.get_fund_data(document_number="18993924000100", from_date="01/2019"))
-        return result
+        response = await asyncio.gather(scrapper.get_fund_data(document_number="18993924000100", from_date="06/2022"))
+        return response
 
     s = perf_counter()
     result = asyncio.run(get_data())
     elapsed = perf_counter() - s
     print(f"Script executed in {elapsed:0.2f} seconds.")
-    
+    print(result)

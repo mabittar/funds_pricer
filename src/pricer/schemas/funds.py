@@ -14,8 +14,8 @@ class RequestQuery(BaseModel):
 class TimeSeriesModel(BaseModel):
     timestamp: datetime.datetime
     value: Decimal
-    owners: int
-    net_worth: float
+    owners: Optional[int]
+    net_worth: Optional[float]
 
 
 class ResponseQuery(RequestQuery):
@@ -27,3 +27,14 @@ class ResponseQuery(RequestQuery):
     from_date: Optional[datetime.date]
     active: Optional[bool]
     timeseries: Optional[List[TimeSeriesModel]]
+
+
+class FundModelLabel(BaseModel):
+    document: str
+    fund_id: Optional[str]
+    fund_released_on: Optional[datetime.date]
+    first_date: datetime.date
+    active: Optional[bool]
+    first_query_date: datetime.date
+    last_query_date: datetime.date
+    active: bool
