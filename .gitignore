@@ -17,10 +17,14 @@ logs
 .idea
 *.log
 logs/
+redis/
 nohup.out
 
 # Temp files
 temp
+
+# Redis Database
+*.rdb
 
 # Commit
 .commit

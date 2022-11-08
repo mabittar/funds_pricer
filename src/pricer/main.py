@@ -25,8 +25,14 @@ def timeit(func):
         try:
             return await func(*args, **kwargs)
         finally:
-            elapsed = (perf_counter() - s) * 1000
-            logger.info(f"func {func.__name__} executed in {elapsed:0.4f} ms.")
+            elapsed = (perf_counter() - s)
+            if elapsed < 1:
+                elapsed = elapsed * 1000
+                msg = f"{elapsed:0.4f} ms."
+            else:
+                msg = f"{elapsed:0.4f} s."
+
+            logger.info(f"Method: {func.__name__} executed in {msg}.")
 
     return wrapper
 
@@ -181,8 +187,8 @@ async def query_funds(query: RequestQuery, background_tasks: BackgroundTasks):
         timeseries=timeseries,
     )
     logger.debug("Persisting data")
-    await redis.persist_timeseries(fund.document, timeseries)
-    # background_tasks.add_task(redis.persist_timeseries(ata.doc_number, value_ts))
+    # await redis.persist_timeseries(fund.document, timeseries)
+    background_tasks.add_task(redis.persist_timeseries(fund.document, timeseries))
     return response
 
 

@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import threading
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
@@ -17,6 +18,7 @@ from selenium.webdriver.support.ui import WebDriverWait  # type: ignore
 from src.pricer.settings import Settings
 
 settings = Settings()
+thread_local = threading.local()
 
 
 @dataclass(order=True)
@@ -83,7 +85,12 @@ class Scrapper:
                                        datetime.strptime(f'01/{date_str}', "%d/%m/%Y").date() <= end_date]
         return available_date_datetime
 
-    async def parse_data(self, wd, i, month_year):
+    async def parse_data(self, wd, i=None, month_year=None):
+        if isinstance(wd, tuple):
+            i = wd[1]
+            month_year = wd[2]
+            wd = wd[0]
+        self.logger.debug(f"Parsing {month_year}")
         i += 1
         wd.find_element(By.XPATH, f"//*[@id='ddComptc']/option[{i}]").click()
         # this will click the option which index is defined by position
@@ -133,15 +140,29 @@ class Scrapper:
         parsed_ts = []
         self.logger.debug(f"Found {len(selectors_filtered)} months to scrap")
         # TODO: Make multiple threads
-        async with asyncio.Semaphore(20):
-            for i, month_year in selectors_filtered:
-                task = asyncio.ensure_future(self.parse_data(wd, i, month_year))
-                parsed_ts.append(task)
-            await asyncio.gather(*parsed_ts, return_exceptions=True)
-        time_series_result = [ts.result() for ts in parsed_ts]
-        timeseries = list(chain.from_iterable(time_series_result))
-
+        items = [(wd, i, month_range) for i, month_range in enumerate(selectors_filtered)]
+        from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            tasks = [executor.submit(self.parse_data, (wd, i, month_year)) for i, month_year in selectors_filtered]
+            wait(tasks)
+            for future in as_completed(tasks):
+                response = await future.result()
+                parsed_ts.append(response)
+        timeseries = list(chain.from_iterable(parsed_ts))
         return timeseries
+
+        # time_series_result = [ts. for ts in parsed_ts]
+        # return parsed_ts
+
+        # async with asyncio.Semaphore(20):
+        #     for i, month_year in selectors_filtered:
+        #         task = asyncio.ensure_future(self.parse_data(wd, i, month_year))
+        #         parsed_ts.append(task)
+        #     await asyncio.gather(*parsed_ts, return_exceptions=True)
+        # wait(parsed_ts)
+        # time_series_result = [ts.result() for ts in parsed_ts]
+        # timeseries = list(chain.from_iterable(time_series_result))
+        # return timeseries
 
     async def get_funds_details(
             self,
