@@ -8,7 +8,6 @@ from typing import Optional, Tuple, List
 from xmlrpc.client import ResponseError
 
 from aioredis.exceptions import ResponseError
-from pydantic.json import pydantic_encoder
 
 from src.pricer.schemas.funds import TimeSeriesModel, FundModelLabel
 from src.pricer.scrapper import FundTS

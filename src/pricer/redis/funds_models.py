@@ -2,7 +2,6 @@ import datetime
 from decimal import Decimal
 from typing import Optional, List
 
-from aredis_om import HashModel, JsonModel, EmbeddedJsonModel
 from pydantic import Field, BaseModel
 
 
