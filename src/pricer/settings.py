@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     redis_port: int = Field(env='REDIS_PORT', default=15000)
     debug: str = Field(env='DEBUG', default="False")
     log_level: str = "DEBUG" if debug else "INFO"
+    fund_channel: str = Field(env='REDIS_CHANNEL', defaul="fund_parser")
 
     class Config:
         env_file = find_dotenv(filename=".env", usecwd=True)

@@ -3,14 +3,14 @@ import datetime
 import functools
 import json
 from decimal import Decimal
-from threading import Thread
+
 from typing import Optional, Tuple, List
 from xmlrpc.client import ResponseError
 
 from aioredis.exceptions import ResponseError
 
-from src.pricer.schemas.funds import TimeSeriesModel, FundModelLabel
-from src.pricer.scrapper import FundTS
+from src.pricer.schemas.funds import TimeSeriesModel
+from src.pricer.scrapper_models import FundTS
 from src.pricer.settings import logger, settings
 
 import aioredis as redis
@@ -126,7 +126,10 @@ class RedisConnector:
         to_date = self.str_2_timestamp(to_date) if to_date is not None else "+"
         ts_cached = {}
         for key in key_list:
-            ts_cached[key] = await self.get_timeseries(key, from_date, to_date)
+            try:
+                ts_cached[key] = await self.get_timeseries(key, from_date, to_date)
+            except ResponseError:
+                ts_cached[key] = None
 
         # TODO: make threads
         # threads = [Thread(target=self.get_timeseries, args=(key, from_date, to_date)) for key in key_list]
@@ -153,6 +156,13 @@ class RedisConnector:
             json.dumps(dataclasses.asdict(data), separators=(",", ":"), cls=EnhancedJSONEncoder)
 
         )
+
+    async def publish(self, msg):
+        try:
+            await self.redis.publish(settings.fund_channel, json.dumps(msg))
+        except (ResponseError, TimeoutError, ConnectionError):
+            self.logger.error(f"Error while publishing: {msg.message_id}")
+            pass
 
     async def add_many_to_timeseries(
             self, key_value_pairs: Tuple, data: list[TimeSeriesModel]

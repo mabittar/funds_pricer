@@ -38,3 +38,9 @@ class FundModelLabel(BaseModel):
     first_query_date: datetime.date
     last_query_date: datetime.date
     active: bool
+
+
+class StreamingSchema(BaseModel):
+    document: str
+    fund_id: Optional[str]
+    timeseries: Optional[List[TimeSeriesModel]]

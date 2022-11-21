@@ -35,3 +35,12 @@ typeguard==2.13.3
 typing_extensions==4.2.0
 ujson==5.5.0
 urllib3==1.26.12
+fastapi==0.85.0
+python-dotenv==0.21.0
+redis==4.3.4
+selenium==4.5.0
+six==1.16.0
+typeguard==2.13.3
+types-redis==4.3.21
+types-six==1.16.21
+uvicorn==0.18.3
