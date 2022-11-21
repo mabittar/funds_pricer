@@ -1,12 +1,10 @@
 import logging
-import asyncio
 import threading
-from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from time import sleep
-from itertools import chain
-from typing import List, Optional, Tuple, Union
+from typing import List, Tuple, Union
+from uuid import uuid4
 
 from fastapi import HTTPException
 from selenium import webdriver
@@ -15,39 +13,13 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait  # type: ignore
 
+from src.pricer.redis.connector import RedisConnector
+from src.pricer.scrapper_models import TimeSeries, FundTS
 from src.pricer.settings import Settings
 
 settings = Settings()
 thread_local = threading.local()
 
-
-@dataclass(order=True)
-class TimeSeries:
-    sort_index: datetime = field(init=False, repr=False)
-    timestamp: datetime
-    value: Decimal
-    owners: [int]
-    net_worth_str: str = field(repr=False)
-    net_worth: float = field(init=False)
-
-    def __post_init__(self):
-        str_number = self.net_worth_str.replace('.', '').replace(',', '.')
-        parsed_num = float(str_number)
-        self.net_worth = parsed_num
-        self.sort_index = self.timestamp
-
-
-@dataclass
-class FundTS:
-    document: Optional[str] = None
-    fund_pk: Optional[str] = None
-    active: Optional[bool] = False
-    fund_name: Optional[str] = None
-    released_on: Optional[date] = None
-    first_query_date: Optional[date] = None
-    last_query_date: Optional[date] = None
-    timeseries: Optional[List[TimeSeries]] = None
-  
 
 class Scrapper:
     def __init__(self, logger=None):
@@ -76,14 +48,13 @@ class Scrapper:
     @staticmethod
     def filter_limit_date(available_date_list: list, from_date: Union[date, None] = None,
                           end_date: Union[date, None] = None) -> List[Tuple]:
-        available_date_datetime = [(index, date_str) for index, date_str in enumerate(available_date_list)]
         if from_date is not None:
-            available_date_datetime = [(index, date_str) for index, date_str in available_date_datetime if
-                                       datetime.strptime(f'01/{date_str}', "%d/%m/%Y").date() >= from_date]
+            available_date_list = [date_str for date_str in available_date_list if
+                                   datetime.strptime(f'01/{date_str}', "%d/%m/%Y").date() >= from_date]
         if end_date is not None:
-            available_date_datetime = [(index, date_str) for index, date_str in available_date_datetime if
-                                       datetime.strptime(f'01/{date_str}', "%d/%m/%Y").date() <= end_date]
-        return available_date_datetime
+            available_date_list = [date_str for date_str in available_date_list if
+                                   datetime.strptime(f'01/{date_str}', "%d/%m/%Y").date() <= end_date]
+        return available_date_list
 
     async def parse_data(self, wd, i=None, month_year=None):
         if isinstance(wd, tuple):
@@ -119,14 +90,26 @@ class Scrapper:
                     self.logger.error(date_field, month_year)
         return timeseries_list
 
+    async def publish_to_parse(self, month_year):
+        redis = RedisConnector()
+        msg = {
+            "document": self.fund_ts_model.document,
+            "fund_pk": self.fund_ts_model.fund_pk,
+            "month_year": month_year,
+            "message_id": str(uuid4()),
+            "acked": False
+        }
+        await redis.publish(msg)
+        self.logger.info(f"Published {month_year} to pubsub")
+
     async def parse_table(
             self,
             wd: Chrome,
-            fund_daily_link: str,
+            link: str,
             from_date: Union[date, None] = None,
             end_date: Union[date, None] = None
     ) -> List[TimeSeries]:
-        wd.get(fund_daily_link)
+        wd.get(link)
         # table = wd.find_element(By.ID, 'TABLE1')
         selectors = wd.find_element(By.XPATH, '//*[@id="ddComptc"]')
         selectors_list = selectors.text.split("\n")
@@ -139,17 +122,25 @@ class Scrapper:
         # open dropdown options
         parsed_ts = []
         self.logger.debug(f"Found {len(selectors_filtered)} months to scrap")
-        # TODO: Make multiple threads
-        items = [(wd, i, month_range) for i, month_range in enumerate(selectors_filtered)]
-        from concurrent.futures import ThreadPoolExecutor, as_completed, wait
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            tasks = [executor.submit(self.parse_data, (wd, i, month_year)) for i, month_year in selectors_filtered]
-            wait(tasks)
-            for future in as_completed(tasks):
-                response = await future.result()
-                parsed_ts.append(response)
-        timeseries = list(chain.from_iterable(parsed_ts))
-        return timeseries
+        for month_year in selectors_filtered:
+            await self.publish_to_parse(month_year)
+
+        # from concurrent.futures import ThreadPoolExecutor, wait
+        # with ThreadPoolExecutor(max_workers=5) as executor:
+        #     tasks = [executor.submit(self.publish_to_parse, month_year) for month_year in selectors_filtered]
+        #     wait(tasks)
+
+        return None
+
+        # from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+        # with ThreadPoolExecutor(max_workers=5) as executor:
+        #     tasks = [executor.submit(self.parse_data, (wd, i, month_year)) for i, month_year in selectors_filtered]
+        #     wait(tasks)
+        #     for future in as_completed(tasks):
+        #         response = await future.result()
+        #         parsed_ts.append(response)
+        # timeseries = list(chain.from_iterable(parsed_ts))
+        # return timeseries
 
         # time_series_result = [ts. for ts in parsed_ts]
         # return parsed_ts
@@ -194,7 +185,7 @@ class Scrapper:
             time_series: list = await self.parse_table(
                 wd=wd,
                 from_date=from_date,
-                fund_daily_link=settings.cvm_fund_url % fund_id
+                link=settings.cvm_fund_url % fund_id
             )
             if time_series is not None:
                 timeseries = sorted(time_series)
@@ -218,16 +209,15 @@ class Scrapper:
         if end_date is not None:
             end_date = end_date if hasattr(end_date, "strftime") else self.str_2_date(end_date)
         # Detalhes do fundo
-        # TODO: validar CNPJ
         with webdriver.Chrome('chromedriver', options=self.chrome_options) as wd:
             self.logger.debug("Success stated webdriver")
             if document_number:
                 self.fund_ts_model.document = document_number
-                fund_daily_link = await self.get_funds_details(document_number, wd)
+                link = await self.get_funds_details(document_number, wd)
             else:
-                fund_daily_link = settings.cvm_fund_url % fund_pk
+                link = settings.cvm_fund_url % fund_pk
             # parser da tabela
-            time_series: list = await self.parse_table(wd, fund_daily_link, from_date, end_date)  # type: ignore
+            time_series: list = await self.parse_table(wd, link, from_date, end_date)  # type: ignore
 
             self.fund_ts_model.timeseries = sorted(time_series) if time_series is not None else None
 

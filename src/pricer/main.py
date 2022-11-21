@@ -9,8 +9,9 @@ from aredis_om import NotFoundError
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 
 from redis.connector import redis_url, RedisConnector, Keys
-from schemas.funds import RequestQuery, ResponseQuery, TimeSeriesModel
-from scrapper import FundTS, Scrapper, TimeSeries
+from schemas.funds import RequestQuery, ResponseQuery, TimeSeriesModel, StreamingSchema
+from scrapper import Scrapper
+from src.pricer.scrapper_models import TimeSeries, FundTS
 from settings import Settings, logger
 
 settings = Settings()
@@ -145,11 +146,15 @@ async def query_funds(query: RequestQuery, background_tasks: BackgroundTasks):
         fund: FundTS = await dict_2_fund_model(fund)
         keys = Keys().timeseries_keys(fund.document)
         cached_ts = await redis.get_cached_timeseries(keys)
-        timeseries_model = await dict_2_timeseries_model(cached_ts, keys)
+        if cached_ts is None:
+            timeseries_model: FundTS = await update_fund_data(fund)
+        else:
+            timeseries_model = await dict_2_timeseries_model(cached_ts, keys)
         fund.timeseries = timeseries_model
+        # TODO: if last date is similar to today just return else filter months to scrap
         if fund.active and fund.timeseries is not None:
             logger.debug("Data already exists for fund updating")
-            data: FundTS = await update_fund_data(fund)
+            fund: FundTS = await update_fund_data(fund)
     else:
         logger.debug("Fund does not saved in database getting all data")
         fund: FundTS = await scrapping(query)
@@ -190,6 +195,33 @@ async def query_funds(query: RequestQuery, background_tasks: BackgroundTasks):
     # await redis.persist_timeseries(fund.document, timeseries)
     background_tasks.add_task(redis.persist_timeseries(fund.document, timeseries))
     return response
+
+
+# TODO: Create new endpoint to direct parse month by streaming
+
+
+@app.patch("/streaming", status_code=200)
+async def query_funds(query: StreamingSchema, background_tasks: BackgroundTasks):
+    logger.debug("Getting fund with CNPJ %s data" % query.document)
+    redis = RedisConnector()  # add to fastapi depends
+    fund: dict = await redis.get_cached_model(query.document)
+    fund: FundTS = await dict_2_fund_model(fund)
+    keys = Keys().timeseries_keys(fund.document)
+    cached_ts = await redis.get_cached_timeseries(keys)
+    timeseries_model = await dict_2_timeseries_model(cached_ts, keys)
+    fund.timeseries = timeseries_model
+    fund.timeseries.append(query.timeseries)
+    value_ts = fund.timeseries
+    if isinstance(value_ts, list):
+        first_date = value_ts[0].timestamp
+        fund.first_query_date = first_date
+        fund.last_query_date = value_ts[-1].timestamp
+    logger.debug("Updating fund with CNPJ %s data" % query.document)
+    await redis.set_cache(fund)
+    logger.debug("Persisting data")
+    await redis.persist_timeseries(fund.document, fund.timeseries)
+    # background_tasks.add_task(redis.persist_timeseries(fund.document, fund.timeseries))
+    return {"message": f"Fund {fund.document} updated!"}
 
 
 @app.get("/funds/{document}")

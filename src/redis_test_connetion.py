@@ -1,34 +1,27 @@
-from redis_om import get_redis_connection
-import datetime
+import aioredis as redis
 
-from redis_om import HashModel
-
-
-class Customer(HashModel):
-    first_name: str
-    last_name: str
-    email: str
-    join_date: datetime.date
-    age: int
-    bio: str
-
-
-andrew = Customer(
-    first_name="Andrew",
-    last_name="Brookins",
-    email="andrew.brookins@example.com",
-    join_date=datetime.date.today(),
-    age=38,
-    bio="Python developer, works at Redis, Inc."
-)
 # This Redis instance is tuned for durability.
 REDIS_DATA_URL = "redis://localhost:6380"
 try:
-    db = get_redis_connection(url=REDIS_DATA_URL, decode_responses=True)
+    db = redis.Redis(
+        host="localhost",
+        port=15000,
+        decode_responses=True,
+        encoding="utf-8"
+    )
     type(db)
     print("connection done!")
-    print(andrew.pk)
-    andrew.save()
-except Exception as e:
+    await db.execute_command(
+        'CREATE',
+        'DUPLICATE_POLICE',
+        'first',
+        "PRICER_TEST",
+        labels={'NAME': "Fund Test",
+                'ACTIVE': True,
+                'FUND_ID': 123456,
+                'RELEASED_ON': "1900/01/01",
+                'LAST_QUERY_DATE': "2022/11/10"
+                }
+    )
+except (redis.ConnectionError, redis.BusyLoadingError) as e:
     print(e)
-
