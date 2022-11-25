@@ -6,6 +6,8 @@ services:
     image: "redislabs/redismod"  # redis/redistimeseries
     ports:
     - "6379:6379"
+    expose:
+    - "6379"
     networks:
     - pricer_network
     volumes:
@@ -13,7 +15,6 @@ services:
     command: --dir /data --loadmodule /usr/lib/redis/modules/redistimeseries.so
 
   queue:
-    container_name: queue
     build: ./src/queue
     restart: always
     networks:

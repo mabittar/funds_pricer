@@ -247,8 +247,8 @@ async def get_fund(document: str, investment: float = 0, date: str = ''):
 
 @app.get("/funds/{document}")
 async def get_fund(document: str, owners: bool = False, networth: bool = False):
+    redis = RedisConnector()  # add to depends
     try:
-        redis = RedisConnector()  # add to depends
         fund: dict = await redis.get_cached_model(document)
 
     except Exception:
@@ -267,10 +267,14 @@ async def get_fund(document: str, owners: bool = False, networth: bool = False):
             fund_key_list.append(Keys().net_worth_ts(fund.document))
         cached_ts = await redis.get_cached_timeseries(fund_key_list)
         fund.timeseries = await dict_2_timeseries_model(cached_ts, fund_key_list)
+        from_date = (
+            datetime.datetime.fromisoformat(fund.first_query_date)
+            if fund.first_query_date is not None else None
+        )
         response = ResponseQuery(
             document=fund.document,
             active=fund.active,
-            from_date=datetime.datetime.fromisoformat(fund.first_query_date),
+            from_date=from_date,
             fund_id=fund.fund_pk,
             fund_released_on=fund.released_on,
             fund_name=fund.fund_name,
