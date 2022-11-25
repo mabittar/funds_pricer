@@ -5,6 +5,14 @@ from typing import Optional, List
 from pydantic import BaseModel
 
 
+class ResponseQuote(BaseModel):
+    document: str
+    date: datetime.datetime
+    investment: Decimal
+    quote_vale_on_date: Decimal
+    number_of_quotes: Decimal
+
+
 class RequestQuery(BaseModel):
     document: str
     from_date: Optional[str]

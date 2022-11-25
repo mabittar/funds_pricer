@@ -13,9 +13,9 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait  # type: ignore
 
-from src.pricer.redis.connector import RedisConnector
-from src.pricer.scrapper_models import TimeSeries, FundTS
-from src.pricer.settings import Settings
+from redis.connector import RedisConnector
+from scrapper_models import TimeSeries, FundTS
+from settings import Settings
 
 settings = Settings()
 thread_local = threading.local()
@@ -29,7 +29,7 @@ class Scrapper:
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_prefs = {}
+        chrome_prefs = dict()
         chrome_options.experimental_options["prefs"] = chrome_prefs
         chrome_prefs["profile.default_content_settings"] = {"images": 2}  # disable image
         self.chrome_options = chrome_options
@@ -122,28 +122,9 @@ class Scrapper:
         # open dropdown options
         parsed_ts = []
         self.logger.debug(f"Found {len(selectors_filtered)} months to scrap")
-        for month_year in selectors_filtered:
-            await self.publish_to_parse(month_year)
-
-        # from concurrent.futures import ThreadPoolExecutor, wait
-        # with ThreadPoolExecutor(max_workers=5) as executor:
-        #     tasks = [executor.submit(self.publish_to_parse, month_year) for month_year in selectors_filtered]
-        #     wait(tasks)
-
-        return None
-
-        # from concurrent.futures import ThreadPoolExecutor, as_completed, wait
-        # with ThreadPoolExecutor(max_workers=5) as executor:
-        #     tasks = [executor.submit(self.parse_data, (wd, i, month_year)) for i, month_year in selectors_filtered]
-        #     wait(tasks)
-        #     for future in as_completed(tasks):
-        #         response = await future.result()
-        #         parsed_ts.append(response)
-        # timeseries = list(chain.from_iterable(parsed_ts))
-        # return timeseries
-
-        # time_series_result = [ts. for ts in parsed_ts]
-        # return parsed_ts
+        await self.publish_to_queue(selectors_filtered)
+        # return await self.parse_with_threads(parsed_ts, selectors_filtered, wd)
+        return parsed_ts
 
         # async with asyncio.Semaphore(20):
         #     for i, month_year in selectors_filtered:
@@ -154,6 +135,29 @@ class Scrapper:
         # time_series_result = [ts.result() for ts in parsed_ts]
         # timeseries = list(chain.from_iterable(time_series_result))
         # return timeseries
+
+    async def parse_with_threads(self, parsed_ts, selectors_filtered, wd):
+        from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+        from itertools import chain
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            tasks = [executor.submit(self.parse_data, (wd, i, month_year)) for i, month_year in selectors_filtered]
+            wait(tasks)
+            for future in as_completed(tasks):
+                response = await future.result()
+                parsed_ts.append(response)
+        timeseries = list(chain.from_iterable(parsed_ts))
+        return timeseries
+
+    async def publish_to_queue(self, selectors_filtered):
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor, wait, as_completed
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            tasks = [executor.submit(self.publish_to_parse, month_year) for month_year in selectors_filtered]
+            # wait for all tasks to complete
+            wait(tasks)
+            for future in as_completed(tasks):
+                await future.result()
+            self.logger.debug(f"All messages published")
 
     async def get_funds_details(
             self,
@@ -210,7 +214,7 @@ class Scrapper:
             end_date = end_date if hasattr(end_date, "strftime") else self.str_2_date(end_date)
         # Detalhes do fundo
         with webdriver.Chrome('chromedriver', options=self.chrome_options) as wd:
-            self.logger.debug("Success stated webdriver")
+            self.logger.debug("Success started webdriver")
             if document_number:
                 self.fund_ts_model.document = document_number
                 link = await self.get_funds_details(document_number, wd)

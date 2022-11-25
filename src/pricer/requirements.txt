@@ -1,4 +1,5 @@
 alabaster==0.7.12
+aioredis==2.0.1
 anyio==3.6.1
 appdirs==1.4.4
 Babel==2.10.3
@@ -30,7 +31,6 @@ sphinxcontrib-htmlhelp==2.0.0
 sphinxcontrib-jsmath==1.0.1
 sphinxcontrib-qthelp==1.0.3
 sphinxcontrib-serializinghtml==1.1.5
-starlette==0.19.1
 typeguard==2.13.3
 typing_extensions==4.2.0
 ujson==5.5.0
