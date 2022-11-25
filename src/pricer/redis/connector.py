@@ -3,18 +3,18 @@ import datetime
 import functools
 import json
 from decimal import Decimal
-from threading import Thread
+
 from typing import Optional, Tuple, List
 from xmlrpc.client import ResponseError
 
 from aioredis.exceptions import ResponseError
-from pydantic.json import pydantic_encoder
-
-from src.pricer.schemas.funds import TimeSeriesModel, FundModelLabel
-from src.pricer.scrapper import FundTS
-from src.pricer.settings import logger, settings
-
 import aioredis as redis
+
+from schemas.funds import TimeSeriesModel
+from scrapper_models import FundTS
+from settings import Settings, logger
+
+settings = Settings()
 
 redis_url = f'redis://{settings.redis_host}:{settings.redis_port}'
 
@@ -102,6 +102,12 @@ class RedisConnector:
     def str_2_timestamp(str_date) -> int:
         return datetime.datetime.strptime(f'01/{str_date}', "%d/%m/%Y").timestamp()
 
+    def convert_date(self, given_date) -> int:
+        if isinstance(given_date, str):
+            return self.str_2_timestamp(given_date)
+        else:
+            return given_date.timestamp()
+
     async def get_timeseries(self, key: str, from_date, to_date):
         cached_ts = await self.redis.execute_command(
             'TS.RANGE',
@@ -115,7 +121,7 @@ class RedisConnector:
             return None
 
     async def get_cached_timeseries(
-            self, key_list: list, from_date: str = None, to_date: str = None
+            self, key_list: list, from_date: str | datetime.datetime = None, to_date: str | datetime.datetime = None
     ):
         """
         Add many samples to several timeseries keys.
@@ -123,17 +129,19 @@ class RedisConnector:
         timestamp key into which to insert entries and the 1th position the name
         of the key within th `data` dict to find the sample.
         """
-        from_date = self.str_2_timestamp(from_date) if from_date is not None else 0
-        to_date = self.str_2_timestamp(to_date) if to_date is not None else "+"
+
+        from_date = self.convert_date(from_date) if from_date is not None else 0
+        to_date = self.convert_date(to_date) if to_date is not None else "+"
         ts_cached = {}
         for key in key_list:
-            ts_cached[key] = await self.get_timeseries(key, from_date, to_date)
+            try:
+                ts_cached[key] = await self.get_timeseries(key, from_date, to_date)
+            except ResponseError:
+                ts_cached[key] = None
 
-        # TODO: make threads
         # threads = [Thread(target=self.get_timeseries, args=(key, from_date, to_date)) for key in key_list]
         # for thread in threads:
         #     thread.start()
-        # for thread in threads:
         #     thread.join()
 
         return ts_cached
@@ -154,6 +162,13 @@ class RedisConnector:
             json.dumps(dataclasses.asdict(data), separators=(",", ":"), cls=EnhancedJSONEncoder)
 
         )
+
+    async def publish(self, msg):
+        try:
+            await self.redis.publish(settings.fund_channel, json.dumps(msg))
+        except (ResponseError, TimeoutError, ConnectionError):
+            self.logger.error(f"Error while publishing: {msg.message_id}")
+            pass
 
     async def add_many_to_timeseries(
             self, key_value_pairs: Tuple, data: list[TimeSeriesModel]

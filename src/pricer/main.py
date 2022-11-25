@@ -5,12 +5,12 @@ from functools import wraps
 from time import perf_counter
 from typing import List
 
-from aredis_om import NotFoundError
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 
 from redis.connector import redis_url, RedisConnector, Keys
-from schemas.funds import RequestQuery, ResponseQuery, TimeSeriesModel
-from scrapper import FundTS, Scrapper, TimeSeries
+from schemas.funds import RequestQuery, ResponseQuery, TimeSeriesModel, StreamingSchema, ResponseQuote
+from scrapper import Scrapper
+from scrapper_models import TimeSeries, FundTS
 from settings import Settings, logger
 
 settings = Settings()
@@ -134,6 +134,9 @@ async def startup():
     redis = await redis.is_redis_available()
     if not redis:
         logger.fatal("Redis server not available")
+        raise HTTPException(
+            status_code=403, detail=f"Redis service is unavailable!"
+        )
 
 
 @app.post("/fund", response_model=ResponseQuery)
@@ -145,13 +148,17 @@ async def query_funds(query: RequestQuery, background_tasks: BackgroundTasks):
         fund: FundTS = await dict_2_fund_model(fund)
         keys = Keys().timeseries_keys(fund.document)
         cached_ts = await redis.get_cached_timeseries(keys)
-        timeseries_model = await dict_2_timeseries_model(cached_ts, keys)
+        if cached_ts is None:
+            timeseries_model: FundTS = await update_fund_data(fund)
+        else:
+            timeseries_model = await dict_2_timeseries_model(cached_ts, keys)
         fund.timeseries = timeseries_model
+        # TODO: if last date is similar to today just return else filter months to scrap
         if fund.active and fund.timeseries is not None:
             logger.debug("Data already exists for fund updating")
-            data: FundTS = await update_fund_data(fund)
+            fund: FundTS = await update_fund_data(fund)
     else:
-        logger.debug("Fund does not saved in database getting all data")
+        logger.debug("Fund not fund in database getting all data")
         fund: FundTS = await scrapping(query)
         if not fund:
             raise HTTPException(
@@ -160,23 +167,26 @@ async def query_funds(query: RequestQuery, background_tasks: BackgroundTasks):
 
     logger.debug("All data retrieved, creating models")
     first_date = None
+    timeseries = None
     value_ts = fund.timeseries
-    if isinstance(value_ts, list):
+    if isinstance(value_ts, list) and len(value_ts) >= 1:
         first_date = value_ts[0].timestamp
         fund.first_query_date = first_date
         fund.last_query_date = value_ts[-1].timestamp
+        timeseries = [
+            TimeSeriesModel(
+                timestamp=entry.timestamp,
+                value=entry.value,
+                owners=entry.owners,
+                net_worth=entry.net_worth
+
+            ) for entry in value_ts
+        ]
+        background_tasks.add_task(redis.persist_timeseries(fund.document, timeseries))
+        del value_ts
     await redis.set_cache(fund)
     logger.debug("Creating Response")
-    timeseries = [
-        TimeSeriesModel(
-            timestamp=entry.timestamp,
-            value=entry.value,
-            owners=entry.owners,
-            net_worth=entry.net_worth
 
-        ) for entry in value_ts
-    ]
-    del value_ts
     response = ResponseQuery(
         document=fund.document,
         active=fund.active,
@@ -188,20 +198,65 @@ async def query_funds(query: RequestQuery, background_tasks: BackgroundTasks):
     )
     logger.debug("Persisting data")
     # await redis.persist_timeseries(fund.document, timeseries)
-    background_tasks.add_task(redis.persist_timeseries(fund.document, timeseries))
+    return response
+
+
+@app.get("/funds/quotes/{document}", response_model=ResponseQuote)
+async def get_fund(document: str, investment: float = 0, date: str = ''):
+    redis = RedisConnector()  # add to depends
+    try:
+        asked_date = datetime.datetime.strptime(date, "%d/%m/%Y")
+    except ValueError:
+        logger.error(f"Invalid date field! {date}")
+        raise HTTPException(status_code=404, detail=f"date field must be dd/mm/yyyy")
+
+    if investment <= 0:
+        logger.error(f"Invalid investment field!, {investment}")
+        raise HTTPException(status_code=404, detail=f"Investment must be greater than R$ 0, sent {investment}.")
+    try:
+        investment = Decimal(investment)
+        fund: dict = await redis.get_cached_model(document)
+
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Fund with CNPJ {document} not found")
+
+    if not fund:
+        logger.error("No fund found!")
+        response = "No fund found!"
+    else:
+        fund: FundTS = await dict_2_fund_model(fund)
+        fund_key_list = [
+            Keys().value_ts(fund.document),
+            Keys().net_worth_ts(fund.document)
+        ]
+        logger.debug("Fund found, get timeseries")
+        cached_ts = await redis.get_cached_timeseries(fund_key_list, asked_date, asked_date)
+        fund.timeseries = await dict_2_timeseries_model(cached_ts, fund_key_list)
+
+    logger.debug("Creating response")
+    quote_value = fund.timeseries[0].value
+    response = ResponseQuote(
+        document=fund.document,
+        date=asked_date,
+        investment=investment,
+        quote_vale_on_date=quote_value,
+        number_of_quotes=Decimal(investment / quote_value),
+    )
     return response
 
 
 @app.get("/funds/{document}")
 async def get_fund(document: str, owners: bool = False, networth: bool = False):
+    redis = RedisConnector()  # add to depends
     try:
-        redis = RedisConnector()  # add to depends
         fund: dict = await redis.get_cached_model(document)
 
-    except NotFoundError:
+    except Exception:
         raise HTTPException(status_code=404, detail=f"Fund with CNPJ {document} not found")
 
-    if fund:
+    if not fund:
+        response = "No fund found!"
+    else:
         fund: FundTS = await dict_2_fund_model(fund)
         fund_key_list = [
             Keys().value_ts(fund.document)
@@ -212,16 +267,17 @@ async def get_fund(document: str, owners: bool = False, networth: bool = False):
             fund_key_list.append(Keys().net_worth_ts(fund.document))
         cached_ts = await redis.get_cached_timeseries(fund_key_list)
         fund.timeseries = await dict_2_timeseries_model(cached_ts, fund_key_list)
+        from_date = (
+            datetime.datetime.fromisoformat(fund.first_query_date)
+            if fund.first_query_date is not None else None
+        )
         response = ResponseQuery(
             document=fund.document,
             active=fund.active,
-            from_date=datetime.datetime.fromisoformat(fund.first_query_date),
+            from_date=from_date,
             fund_id=fund.fund_pk,
             fund_released_on=fund.released_on,
             fund_name=fund.fund_name,
             timeseries=fund.timeseries,
         )
-    else:
-        response = "No fund found!"
-
     return response
