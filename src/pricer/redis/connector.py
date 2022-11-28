@@ -137,6 +137,7 @@ class RedisConnector:
             try:
                 ts_cached[key] = await self.get_timeseries(key, from_date, to_date)
             except ResponseError:
+                self.logger.debug(f'Cached key {key} returning None')
                 ts_cached[key] = None
 
         # threads = [Thread(target=self.get_timeseries, args=(key, from_date, to_date)) for key in key_list]

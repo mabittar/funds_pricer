@@ -50,7 +50,7 @@ async def scrapping(data: RequestQuery) -> FundTS:
 
 
 @timeit
-async def update_fund_data(data: FundTS) -> FundTS:
+async def update_fund_data(data: FundTS) -> FundTS | None:
     if data.timeseries is None:
         data.last_query_date = None
     scrapper = Scrapper(logger=logger)
@@ -58,14 +58,17 @@ async def update_fund_data(data: FundTS) -> FundTS:
         fund_id=data.fund_pk,
         from_date=data.last_query_date
     )
-    last_entry = max(result)
-    data.last_query_date = last_entry.timestamp
-    if data.timeseries is not None:
-        data.timeseries.append(result)
+    if result is None:
+        # Sent to queue
+        return None
     else:
-        data.timeseries = result
-    # TODO: update data in DB
-    return result
+        last_entry = max(result)
+        data.last_query_date = last_entry.timestamp
+        if data.timeseries is not None:
+            data.timeseries.append(result)
+        else:
+            data.timeseries = result
+        return result
 
 
 @timeit
@@ -145,18 +148,16 @@ async def query_funds(query: RequestQuery, background_tasks: BackgroundTasks):
     redis = RedisConnector()  # add to fastapi depends
     fund: dict = await redis.get_cached_model(query.document)
     if fund:
+        logger.debug("Cached data found, updating")
         fund: FundTS = await dict_2_fund_model(fund)
         keys = Keys().timeseries_keys(fund.document)
         cached_ts = await redis.get_cached_timeseries(keys)
-        if cached_ts is None:
-            timeseries_model: FundTS = await update_fund_data(fund)
+        if cached_ts is not None or any(d for d in cached_ts):
+            timeseries = await dict_2_timeseries_model(cached_ts, keys)
         else:
-            timeseries_model = await dict_2_timeseries_model(cached_ts, keys)
-        fund.timeseries = timeseries_model
-        # TODO: if last date is similar to today just return else filter months to scrap
-        if fund.active and fund.timeseries is not None:
             logger.debug("Data already exists for fund updating")
-            fund: FundTS = await update_fund_data(fund)
+            timeseries: FundTS = await update_fund_data(fund)
+        fund.timeseries = timeseries
     else:
         logger.debug("Fund not fund in database getting all data")
         fund: FundTS = await scrapping(query)

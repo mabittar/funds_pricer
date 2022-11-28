@@ -212,12 +212,37 @@ class QueueConnector:
                 )
         return partial()
 
+    async def create_ts(self, key):
+        try:
+            await self.redis.execute_command(
+                'TS.CREATE', key,
+                'DUPLICATE_POLICY', 'first',
+            )
+        except ResponseError as e:
+            # Time series probably already exists
+            logger.info('Could not create timeseries %s, error: %s', key, e)
+
+    async def check_ts_by_key(self, key: str):
+        cached = await self.redis.get(key)
+        if cached:
+            return True
+        else:
+            return False
+
+    async def create_ts_key(self, key_list):
+        for key in key_list:
+            existing = await self.check_ts_by_key(key)
+            if not existing:
+                self.logger.info("Time series not found, will be created!")
+                await self.create_ts(key)
+
     async def stream_data(self, data: FundTS, msg: PubSubMsg):
         self.logger.debug("Message processed, streaming parsed data")
         doc_number = msg.document
         value_key = f"PRICER_value_{doc_number}"
         owner_key = f"PRICER_owners_{doc_number}"
         networth_key = f"PRICER_networth_{doc_number}"
+        await self.create_ts_key([value_key, owner_key, networth_key])
         try:
             await self.add_many_to_timeseries(
                 (
@@ -230,7 +255,7 @@ class QueueConnector:
         except ResponseError as e:
             logger.error('Error while streaming data series for document: %s, month: %s', (doc_number, msg.month_year))
 
-        # msg.acked = True -> Pure redis doesnt acked msg, only listen
+        # msg.acked = True -> Pure redis doesn't acked msg, only listen
         self.logger.info(f"Data parsed and streamed. Acked {msg.message_id}")
 
     async def handle_message(self, msg):
