@@ -1,0 +1,9 @@
+pydantic==1.9.1
+redis==4.3.4
+selenium==4.5.0
+six==1.16.0
+typeguard==2.13.3
+types-redis==4.3.21
+types-six==1.16.21
+python-dotenv==0.21.0
+uvicorn==0.18.3
