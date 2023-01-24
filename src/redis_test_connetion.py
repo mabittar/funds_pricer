@@ -1,27 +1,29 @@
 import aioredis as redis
+import asyncio
 
-# This Redis instance is tuned for durability.
-REDIS_DATA_URL = "redis://localhost:6380"
-try:
-    db = redis.Redis(
-        host="localhost",
-        port=15000,
-        decode_responses=True,
-        encoding="utf-8"
-    )
-    type(db)
-    print("connection done!")
-    await db.execute_command(
-        'CREATE',
-        'DUPLICATE_POLICE',
-        'first',
-        "PRICER_TEST",
-        labels={'NAME': "Fund Test",
-                'ACTIVE': True,
-                'FUND_ID': 123456,
-                'RELEASED_ON': "1900/01/01",
-                'LAST_QUERY_DATE': "2022/11/10"
-                }
-    )
-except (redis.ConnectionError, redis.BusyLoadingError) as e:
-    print(e)
+
+async def test_redis():
+    try:
+        db = await redis.Redis(
+            host="localhost",
+            port=6379,
+            decode_responses=True,
+            encoding="utf-8"
+        )
+        print(type(db))
+        async with db.client() as conn:
+            result = await conn.execute_command("set", "my-key", "some value")
+            assert result is True
+            print("connection is working!")
+    except (redis.ConnectionError, redis.BusyLoadingError, redis.ResponseError) as e:
+        print(e)
+
+
+async def main():
+    await test_redis()
+
+
+if __name__ == '__main__':
+    print("This script check for redis connection")
+    print("Open another terminal and type: 'redis-cli' -> 'MONITOR'")
+    asyncio.run(main())
