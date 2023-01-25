@@ -120,11 +120,11 @@ class Scrapper:
             "showDropdown = function (element) {var event; event = document.createEvent('MouseEvents'); event.initMouseEvent('mousedown', true, true, window); element.dispatchEvent(event); }; showDropdown(arguments[0]);",
             select)
         # open dropdown options
-        parsed_ts = []
         self.logger.debug(f"Found {len(selectors_filtered)} months to scrap")
+        parsed_ts = []
         await self.publish_to_queue(selectors_filtered)
-        # return await self.parse_with_threads(parsed_ts, selectors_filtered, wd)
         return parsed_ts
+        # return await self.parse_with_threads(parsed_ts, selectors_filtered, wd)
 
         # async with asyncio.Semaphore(20):
         #     for i, month_year in selectors_filtered:
@@ -140,7 +140,8 @@ class Scrapper:
         from concurrent.futures import ThreadPoolExecutor, as_completed, wait
         from itertools import chain
         with ThreadPoolExecutor(max_workers=5) as executor:
-            tasks = [executor.submit(self.parse_data, (wd, i, month_year)) for i, month_year in selectors_filtered]
+            tasks = [executor.submit(self.parse_data, (wd, i, month_year)) for i, month_year in
+                     enumerate(selectors_filtered)]
             wait(tasks)
             for future in as_completed(tasks):
                 response = await future.result()
@@ -149,7 +150,6 @@ class Scrapper:
         return timeseries
 
     async def publish_to_queue(self, selectors_filtered):
-        import asyncio
         from concurrent.futures import ThreadPoolExecutor, wait, as_completed
         with ThreadPoolExecutor(max_workers=5) as executor:
             tasks = [executor.submit(self.publish_to_parse, month_year) for month_year in selectors_filtered]
@@ -191,7 +191,7 @@ class Scrapper:
                 from_date=from_date,
                 link=settings.cvm_fund_url % fund_id
             )
-            if time_series is not None:
+            if len(time_series) > 0:
                 timeseries = sorted(time_series)
 
         return timeseries
@@ -234,7 +234,7 @@ if __name__ == "__main__":
 
     async def get_data():
         scrapper = Scrapper()
-        response = await asyncio.gather(scrapper.get_fund_data(document_number="18993924000100", from_date="06/2022"))
+        response = await asyncio.gather(scrapper.get_fund_data(document_number="18993924000100", from_date="09/2022"))
         return response
 
     s = perf_counter()

@@ -2,16 +2,18 @@ import asyncio
 import dataclasses
 import functools
 import json
+import aioredis as redis
 import signal
-from dataclasses import dataclass, field
-from datetime import datetime, date
-
-from decimal import Decimal
-from uuid import uuid4
-import redis
-from redis.exceptions import ResponseError, TimeoutError, ConnectionError
-from queue_settings import Settings, logger
 import threading
+
+from uuid import uuid4
+from decimal import Decimal
+from datetime import datetime, date
+from dataclasses import dataclass, field
+
+import async_timeout
+
+from queue_settings import Settings, logger
 from typing import List, Optional, Tuple, Union
 
 from selenium import webdriver
@@ -146,6 +148,7 @@ class DataParser:
             msg: PubSubMsg
     ) -> List[TimeSeries]:
         fund_daily_link = settings.cvm_fund_url % msg.fund_pk
+        self.logger.info("start scraper for %s" % fund_daily_link)
         parse_date = msg.month_year
         with webdriver.Chrome('chromedriver', options=self.chrome_options) as wd:
             self.logger.debug("Success started webdriver")
@@ -154,16 +157,19 @@ class DataParser:
             selectors_list = selectors.text.split("\n")
             selectors_list = [i.replace(' ', "") for i in selectors_list[:-1]]
             selectors_filtered: Tuple = self.select_parse_date(selectors_list, parse_date)
-            select = wd.find_element(By.XPATH, '//*[@id="ddComptc"]')
+            # select = wd.find_element(By.XPATH, '//*[@id="ddComptc"]')
             wd.execute_script(
                 "showDropdown = function (element) {var event; event = document.createEvent('MouseEvents'); event.initMouseEvent('mousedown', true, true, window); element.dispatchEvent(event); }; showDropdown(arguments[0]);",
-                select)
+                selectors)
             self.logger.debug(f"Starting parser for {parse_date}.")
             parsed_ts = await self.parse_data(wd, selectors_filtered[0], selectors_filtered[1])
-            if parsed_ts is not None:
-                parsed_ts = sorted(parsed_ts)
-                self.fund_ts_model.timeseries = parsed_ts
-
+        if parsed_ts is not None:
+            parsed_ts = sorted(parsed_ts)
+            self.fund_ts_model.timeseries = parsed_ts
+            self.fund_ts_model.document = msg.document
+            self.fund_ts_model.fund_pk = msg.fund_pk
+            max_ts = max(parsed_ts)
+            self.fund_ts_model.last_query_date = max_ts.timestamp
         return self.fund_ts_model
 
 
@@ -183,9 +189,14 @@ class QueueConnector:
     def __init__(self):
         self.logger = logger
         self.channel = settings.channel
-        self.redis = redis.Redis(
-            host=settings.redis_host,
-            port=settings.redis_port,
+        pool = redis.ConnectionPool.from_url(
+            f"redis://{settings.redis_host}",
+            decode_responses=True,
+            encoding="utf-8"
+        )
+        self.redis = redis.Redis(connection_pool=pool)
+        self.ps = redis.from_url(
+            f"redis://{settings.redis_host}",
             decode_responses=True,
             encoding="utf-8"
         )
@@ -210,53 +221,45 @@ class QueueConnector:
                     int(entry.timestamp.timestamp()),
                     v
                 )
-        return partial()
+        return await partial()
 
     async def create_ts(self, key):
         try:
             await self.redis.execute_command(
                 'TS.CREATE', key,
-                'DUPLICATE_POLICY', 'first',
+                'DUPLICATE_POLICY', 'last',
             )
-        except ResponseError as e:
+        except redis.ResponseError as e:
             # Time series probably already exists
             logger.info('Could not create timeseries %s, error: %s', key, e)
 
-    async def check_ts_by_key(self, key: str):
-        cached = await self.redis.get(key)
-        if cached:
-            return True
-        else:
-            return False
+    async def check_ts_by_key(self, key: str) -> bool:
+        existing_key = bool(await self.redis.exists(key))
+        self.logger.debug(f"Key {key} exists: {existing_key}")
+        return existing_key
 
     async def create_ts_key(self, key_list):
         for key in key_list:
-            existing = await self.check_ts_by_key(key)
-            if not existing:
-                self.logger.info("Time series not found, will be created!")
+            # existing_key = await self.check_ts_by_key(key)
+            if not bool(await self.redis.exists(key)):
+                self.logger.info(f"Key {key} not found, will be created!")
                 await self.create_ts(key)
 
     async def stream_data(self, data: FundTS, msg: PubSubMsg):
-        self.logger.debug("Message processed, streaming parsed data")
+        self.logger.debug(f"Message {msg.message_id} processed, streaming parsed data")
         doc_number = msg.document
         value_key = f"PRICER_value_{doc_number}"
         owner_key = f"PRICER_owners_{doc_number}"
         networth_key = f"PRICER_networth_{doc_number}"
         await self.create_ts_key([value_key, owner_key, networth_key])
-        try:
-            await self.add_many_to_timeseries(
-                (
-                    (value_key, "value"),
-                    (owner_key, "owners"),
-                    (networth_key, "net_worth"),
-                ),
-                data.timeseries
-            )
-        except ResponseError as e:
-            logger.error('Error while streaming data series for document: %s, month: %s', (doc_number, msg.month_year))
-
-        # msg.acked = True -> Pure redis doesn't acked msg, only listen
-        self.logger.info(f"Data parsed and streamed. Acked {msg.message_id}")
+        await self.add_many_to_timeseries(
+            (
+                (value_key, "value"),
+                (owner_key, "owners"),
+                (networth_key, "net_worth"),
+            ),
+            data.timeseries
+        )
 
     async def handle_message(self, msg):
         """Kick off tasks for a given message.
@@ -265,41 +268,58 @@ class QueueConnector:
         """
         self.logger.debug("Creating event and start table parser.")
         parser = DataParser()
-        data = await asyncio.create_task(parser.parser_fund(msg))
+        data = await parser.parser_fund(msg)
         if data:
-            await asyncio.create_task(self.stream_data(data, msg))
+            try:
+                await self.stream_data(data, msg)
+            except (Exception, redis.ResponseError) as e:
+                logger.error(
+                    'Error while streaming data series for document: %s, month: %s', (msg.doc_number, msg.month_year)
+                )
+                logger.info(e)
+
+        # msg.acked = True -> Pure redis doesn't acked msg, only listen
+        self.logger.info(f"Data parsed and streamed. Acked {msg.message_id}")
+
+    async def reader(self, ps: redis.client.PubSub):
+        seconds = 1
+        while True:
+            try:
+                async with async_timeout.timeout(seconds):
+                    message = await ps.get_message(ignore_subscribe_messages=True)
+                    if message is not None:
+                        self.logger.info(f"(Reader) Message Received: {message}")
+                        message_dict = json.loads(message["data"])
+                        msg = PubSubMsg(**message_dict)
+                        msg.message_id = str(uuid4()) if msg.message_id is None else msg.message_id
+                        if msg.acked:
+                            continue
+                        await asyncio.create_task(self.handle_message(msg), name=msg.message_id)
+                    await asyncio.sleep(seconds)
+            except asyncio.TimeoutError:
+                logger.info(f"No message on topic {list(ps.channels.keys())[0]} waiting for {seconds} seconds.")
+                pass
 
     async def consume(self):
         """Consumer client to subscribing to redis publisher.
         """
-        while True:
-            ps = self.redis.pubsub()
-            ps.subscribe(self.channel)
-            for raw_message in ps.listen():
-                if raw_message["type"] != "message":
-                    continue
-                message_dict = json.loads(raw_message["data"])
-                msg = PubSubMsg(**message_dict)
-                msg.message_id = str(uuid4()) if msg.message_id is None else msg.message_id
-                if msg.acked:
-                    continue
-                self.logger.info(f"Consumed {msg.message_id}")
-                await asyncio.create_task(self.handle_message(msg), name=msg.message_id)
+        ps = self.ps.pubsub()
+        await ps.subscribe(self.channel)
+        future = asyncio.create_task(self.reader(ps))
+        await future
 
     @staticmethod
     async def shutdown(loop, signal=None):
         """Cleanup tasks tied to the service's shutdown."""
         if signal:
             logger.info(f"Received exit signal {signal.name}...")
-        logger.info("Nacking outstanding messages")
-        tasks = [t for t in asyncio.all_tasks() if t is not
-                 asyncio.current_task()]
-
-        [task.cancel() for task in tasks]
-
-        logger.info(f"Cancelling {len(tasks)} outstanding tasks")
-        await asyncio.gather(*tasks, return_exceptions=True)
-        logger.info(f"Flushing metrics")
+        tasks = []
+        for task in asyncio.all_tasks(loop):
+            if task is not asyncio.current_task(loop):
+                task.cancel()
+                tasks.append(task)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        logger.warning(f"Finished awaiting cancelled tasks, results: {results}")
         loop.stop()
 
     def handle_exception(self, loop, context):
@@ -317,7 +337,7 @@ def main():
     signals = (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
     for s in signals:
         loop.add_signal_handler(
-            s, lambda s: asyncio.create_task(queue_connector.shutdown(loop, signal=s)))
+            s, lambda: asyncio.create_task(queue_connector.shutdown(loop, signal=s)))
     # comment out the line below to see how unhandled exceptions behave
     loop.set_exception_handler(queue_connector.handle_exception)
 
