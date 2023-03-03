@@ -5,40 +5,40 @@ services:
     container_name: redis
     image: "redislabs/redismod"  # redis/redistimeseries
     ports:
-    - "6379:6379"
+      - "6379:6379"
     expose:
     - "6379"
-    networks:
-    - pricer_network
+#     networks:
+#       - pricer_network
     volumes:
-    - ./redis:/data
+      - ./redis:/data
     command: --dir /data --loadmodule /usr/lib/redis/modules/redistimeseries.so
 
-  queue:
-    build: ./src/queue
-    restart: always
-    networks:
-     - pricer_network
-    depends_on:
-    - redis
-    env_file:
-     - ./src/.env
+#   queue:
+#     build: ./src/queue
+#     restart: always
+#     networks:
+#      - pricer_network
+#     depends_on:
+#     - redis
+#     env_file:
+#      - ./src/.env
 
-  pricer:
-    container_name: pricer
-    build: ./src/pricer
-    restart: always
-    ports:
-      - "8000:8000"
-    networks:
-    - pricer_network
-    depends_on:
-    - redis
-    env_file:
-    - ./src/.env
-    environment:
-    - PYTHONUNBUFFERED=0
-    - PYTHONPATH=/pricer
-
-networks:
-  pricer_network:
+#   pricer:
+#     container_name: pricer
+#     build: ./src/pricer
+#     restart: always
+#     ports:
+#       - "8000:8000"
+#     networks:
+#     - pricer_network
+#     depends_on:
+#     - redis
+#     env_file:
+#     - ./src/.env
+#     environment:
+#     - PYTHONUNBUFFERED=0
+#     - PYTHONPATH=/pricer
+#
+# networks:
+#   pricer_network:

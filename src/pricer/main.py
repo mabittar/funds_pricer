@@ -58,7 +58,7 @@ async def update_fund_data(data: FundTS) -> FundTS | None:
         fund_id=data.fund_pk,
         from_date=data.last_query_date
     )
-    if result is None:
+    if result is None or len(result) > 0:
         # Sent to queue
         return None
     else:
@@ -86,7 +86,7 @@ async def dict_2_fund_model(cached_data: dict) -> FundTS:
 
 
 @timeit
-async def dict_2_timeseries_model(cached_data: dict, key_list: list):
+async def dict_2_timeseries_model(cached_data: dict, key_list: list) -> List[TimeSeriesModel] | None:
     key_list_length = len(key_list)
     owners_key = True if any("owners_" in key for key in key_list) else None
     networth_key = True if any("networth_" in key for key in key_list) else None
@@ -127,7 +127,7 @@ async def dict_2_timeseries_model(cached_data: dict, key_list: list):
                 owners=int(cached_data[key_list[1]][i][1])
             )
             time_series_list.append(time_series)
-    return time_series_list
+    return time_series_list.sort(key=lambda x: x.timestamp)
 
 
 @app.on_event("startup")
@@ -152,8 +152,11 @@ async def query_funds(query: RequestQuery, background_tasks: BackgroundTasks):
         fund: FundTS = await dict_2_fund_model(fund)
         keys = Keys().timeseries_keys(fund.document)
         cached_ts = await redis.get_cached_timeseries(keys)
-        if cached_ts is not None or any(d for d in cached_ts):
-            timeseries = await dict_2_timeseries_model(cached_ts, keys)
+        if cached_ts is not None or all(d for d in cached_ts):
+            timeseries: List[TimeSeriesModel] = await dict_2_timeseries_model(cached_ts, keys)
+            if timeseries is None or timeseries[-1].timestamp != datetime.datetime.now():
+                fund.timeseries = timeseries
+                timeseries: FundTS = await update_fund_data(fund)
         else:
             logger.debug("Data already exists for fund updating")
             timeseries: FundTS = await update_fund_data(fund)
