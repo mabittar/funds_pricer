@@ -1,26 +1,34 @@
 <img src="https://github.com/damiancipolat/Redis_PUBSUB_node/blob/master/doc/logo.png?raw=true" width="150px" align="right" />
 
-# Web Scraper distributed using redis PUB/SUB and threads
+# Web Scraper distributed using redis PUB/SUB and Threads
+When I was researching the value of the share of investment funds on the internet, I realized that the CVM website 
+needed some help to make life easier for anyone who wanted to research various funds..... 
+If I wanted to consult the value on a specific date for a background, 
+I would need to make many clicks and it would be unfeasible. Then came the idea of 
+creating a scrapper of this data in high availability
 
-An example of scraper using redis pub/sub features with docker and python + threads.
+
+This project is a API with FastAPI and multiple instance scraper in Python, using Threads and queue control. 
+I also use redis as main database and other redis's features. 
+Everything with docker and docker-compose to create an easy environment.
 
 ## Stack:
 
-Our stack will be:
+The stack will be:
 
 - Python 3.10 + FastAPI
 - Multithread and asyncio loop
 - Redis native client.
-- Redis Timeseries and PubSub
-- Docker + docker-compose
+- Redis Timeseries and PubSub / Stream
+- Docker + Docker-Compose
 
 ## Architecture:
 
 There are three main blocks.
 
-- **Api rest as Pricer**: Receive funds CNPJ to scrap and publish into the redis pubsub.
+- **Api rest as Pricer**: Built using FastApi it will receive the requests with funds CNPJ to be scrapped and publish into the pubsub.
 - **Queues**: Different instances of the same script running in parallel, using asyncio loop to consume messages
-  published to redis pubsub in a specific Topic. Acting as consumer group
+  published to redis stream with specific key. Acting as consumer group.
 
 ## Why REDIS
 
@@ -60,6 +68,19 @@ Using Redis as PubSub have a huge problem, you will not be able to act a message
 wanting for act
 if something goes wrong, there no module like fire-and-forget.
 
+### Using Redis Stream
+
+Redis Stream is parte of Redis modulo from version 4.2, based on Kafka concept about the context of messaging.
+This module is all about AP messaging, which is, fault tolerance and guarantees of delivery without much efforts from the client.
+
+Similarly, Redis pub/sub can be used to publish a stream of messages to any number of interested consumers. Pub/sub is limited by the fact that it is "fire and forget". There is no history, nor is there any indication that a message has been read.
+
+Streams allow the implementation of more robust message processing workflows, thanks to the following features:
+
+streams allow messages to be fanned-out to multiple consumers or you can use stateful consumers ("consumer groups") to coordinate message processing among multiple workers.
+message history is preserved and visible to other clients.
+consumer groups support message acknowledgements, claiming stale unacknowledged messages, and introspecting pending messages, ensuring that messages are not lost in the event of an application crash.
+streams support blocking read operations.
 ### Pub - Sub Design:
 
 All the server and workers run into a docker container, for the queue script I used docker-compose in scale mode.
