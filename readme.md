@@ -85,7 +85,7 @@ streams support blocking read operations.
 
 All the server and workers run into a docker container, for the queue script I used docker-compose in scale mode.
 
-<img src="https://github.com/damiancipolat/Redis_PUBSUB_node/blob/master/doc/pub-sub-redis.png?raw=true" align="center" />
+<img src="https://github.com/mabittar/funds_pricer/blob/35d21ab5d9da87f8106a79d410d1d3d37b3ad1dd/assets/arch.jpg?raw=true" align="center" />
 
 In this diagram, we are focusing the events architecture to create a async flow using events, I'm using the pub/sub *
 *channel** as event queue.
