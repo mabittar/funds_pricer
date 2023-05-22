@@ -182,8 +182,10 @@ class Scrapper:
 
         return fund_daily_link
 
-    async def update_fund_data(self, fund_id: str, from_date: str) -> list[TimeSeries]:
+    async def update_fund_data(self, fund_id: str, from_date: str, document: str = None) -> list[TimeSeries]:
         timeseries = None
+        self.fund_ts_model.fund_pk = fund_id
+        self.fund_ts_model.document = document
         from_date = datetime.fromisoformat(from_date) if isinstance(from_date, str) else None
         with webdriver.Chrome('chromedriver', options=self.chrome_options) as wd:
             time_series: list = await self.parse_table(

@@ -299,6 +299,9 @@ class QueueConnector:
             except asyncio.TimeoutError:
                 logger.info(f"No message on topic {list(ps.channels.keys())[0]} waiting for {seconds} seconds.")
                 pass
+            except Exception as ex:
+                self.logger.error(ex)
+                continue
 
     async def consume(self):
         """Consumer client to subscribing to redis publisher.

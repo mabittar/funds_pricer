@@ -8,37 +8,37 @@ services:
       - "6379:6379"
     expose:
     - "6379"
-#     networks:
-#       - pricer_network
     volumes:
       - ./redis:/data
     command: --dir /data --loadmodule /usr/lib/redis/modules/redistimeseries.so
 
-#   queue:
-#     build: ./src/queue
-#     restart: always
-#     networks:
-#      - pricer_network
-#     depends_on:
-#     - redis
-#     env_file:
-#      - ./src/.env
+  queue:
+    build: ./src/queue
+    restart: always
+    depends_on:
+    - redis
+    env_file:
+     - ./src/.env
+    links:
+    - redis
 
-#   pricer:
-#     container_name: pricer
-#     build: ./src/pricer
-#     restart: always
-#     ports:
-#       - "8000:8000"
-#     networks:
-#     - pricer_network
-#     depends_on:
-#     - redis
-#     env_file:
-#     - ./src/.env
-#     environment:
-#     - PYTHONUNBUFFERED=0
-#     - PYTHONPATH=/pricer
-#
-# networks:
-#   pricer_network:
+  pricer:
+    container_name: pricer
+    build: ./src/pricer
+    restart: always
+    ports:
+      - "8000:8000"
+    depends_on:
+    - redis
+    links:
+    - redis
+    env_file:
+    - ./src/.env
+    environment:
+    - PYTHONUNBUFFERED=0
+    - PYTHONPATH=/pricer
+
+volumes:
+  redis:
+    driver: local
+

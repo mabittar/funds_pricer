@@ -56,7 +56,8 @@ async def update_fund_data(data: FundTS) -> FundTS | None:
     scrapper = Scrapper(logger=logger)
     result: List[TimeSeries] = await scrapper.update_fund_data(
         fund_id=data.fund_pk,
-        from_date=data.last_query_date
+        from_date=data.last_query_date,
+        document=data.document
     )
     if result is None or len(result) > 0:
         # Sent to queue
@@ -142,7 +143,7 @@ async def startup():
         )
 
 
-@app.post("/fund", response_model=ResponseQuery)
+@app.post("/v1/funds", response_model=ResponseQuery)
 async def query_funds(query: RequestQuery, background_tasks: BackgroundTasks):
     logger.debug("Getting fund with CNPJ %s data" % query.document)
     redis = RedisConnector()  # add to fastapi depends
@@ -205,7 +206,7 @@ async def query_funds(query: RequestQuery, background_tasks: BackgroundTasks):
     return response
 
 
-@app.get("/funds/quotes/{document}", response_model=ResponseQuote)
+@app.get("/v1/funds/quotes/{document}", response_model=ResponseQuote)
 async def get_fund(document: str, investment: float = 0, date: str = ''):
     redis = RedisConnector()  # add to depends
     try:
@@ -249,39 +250,39 @@ async def get_fund(document: str, investment: float = 0, date: str = ''):
     return response
 
 
-@app.get("/funds/{document}")
-async def get_fund(document: str, owners: bool = False, networth: bool = False):
-    redis = RedisConnector()  # add to depends
-    try:
-        fund: dict = await redis.get_cached_model(document)
-
-    except Exception:
-        raise HTTPException(status_code=404, detail=f"Fund with CNPJ {document} not found")
-
-    if not fund:
-        response = "No fund found!"
-    else:
-        fund: FundTS = await dict_2_fund_model(fund)
-        fund_key_list = [
-            Keys().value_ts(fund.document)
-        ]
-        if owners:
-            fund_key_list.append(Keys().owners_ts(fund.document))
-        if networth:
-            fund_key_list.append(Keys().net_worth_ts(fund.document))
-        cached_ts = await redis.get_cached_timeseries(fund_key_list)
-        fund.timeseries = await dict_2_timeseries_model(cached_ts, fund_key_list)
-        from_date = (
-            datetime.datetime.fromisoformat(fund.first_query_date)
-            if fund.first_query_date is not None else None
-        )
-        response = ResponseQuery(
-            document=fund.document,
-            active=fund.active,
-            from_date=from_date,
-            fund_id=fund.fund_pk,
-            fund_released_on=fund.released_on,
-            fund_name=fund.fund_name,
-            timeseries=fund.timeseries,
-        )
-    return response
+# @app.get("/funds/{document}")
+# async def get_fund(document: str, owners: bool = False, networth: bool = False):
+#     redis = RedisConnector()  # add to depends
+#     try:
+#         fund: dict = await redis.get_cached_model(document)
+#
+#     except Exception:
+#         raise HTTPException(status_code=404, detail=f"Fund with CNPJ {document} not found")
+#
+#     if not fund:
+#         response = "No fund found!"
+#     else:
+#         fund: FundTS = await dict_2_fund_model(fund)
+#         fund_key_list = [
+#             Keys().value_ts(fund.document)
+#         ]
+#         if owners:
+#             fund_key_list.append(Keys().owners_ts(fund.document))
+#         if networth:
+#             fund_key_list.append(Keys().net_worth_ts(fund.document))
+#         cached_ts = await redis.get_cached_timeseries(fund_key_list)
+#         fund.timeseries = await dict_2_timeseries_model(cached_ts, fund_key_list)
+#         from_date = (
+#             datetime.datetime.fromisoformat(fund.first_query_date)
+#             if fund.first_query_date is not None else None
+#         )
+#         response = ResponseQuery(
+#             document=fund.document,
+#             active=fund.active,
+#             from_date=from_date,
+#             fund_id=fund.fund_pk,
+#             fund_released_on=fund.released_on,
+#             fund_name=fund.fund_name,
+#             timeseries=fund.timeseries,
+#         )
+#     return response
